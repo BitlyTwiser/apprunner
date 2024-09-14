@@ -20,6 +20,7 @@ pub fn main() !void {
 
     var yml_config = try config.YamlConfig.init(allocator, args[1]);
     const results = try yml_config.parseConfig();
+    defer allocator.free(results.apps);
 
     // Spawns all threads and waits
     var run = try runner.Runner.init(allocator);

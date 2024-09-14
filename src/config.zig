@@ -30,12 +30,9 @@ pub const YamlConfig = struct {
             self.allocator,
             self.yml_location,
         );
-        // Free these later!
-        // defer self.allocator.free(yml_path);
 
         var ymlz = try Ymlz(Config).init(self.allocator);
         const result = try ymlz.loadFile(yml_path);
-        // defer ymlz.deinit(result);
 
         return result;
     }
