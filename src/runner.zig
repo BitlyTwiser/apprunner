@@ -31,6 +31,8 @@ const print = std.debug.print;
 
 // Find shell type, sh, bash, zsh etc..
 
+const app_name = "apprunner";
+
 /// Runner is responsible for running all commands parsed from the yaml to TMUX
 pub const Runner = struct {
     const Self = @This();
@@ -44,7 +46,8 @@ pub const Runner = struct {
     }
 
     pub fn spawner(self: *Self, apps: []config.App) !void {
-        var thread_pool = try self.allocator.alloc(std.Thread, apps.len);
+        // Add 1 for the additional spawner for the windows
+        var thread_pool = try self.allocator.alloc(std.Thread, apps.len + 1);
         for (apps, 0..) |app, i| {
             thread_pool[i] = try std.Thread.spawn(.{ .allocator = self.allocator }, spawnProcess, .{ self, app.name, app.stand, app.command, app.location, i });
         }
@@ -79,18 +82,17 @@ pub const Runner = struct {
         var r_command: []u8 = undefined;
 
         if (index == 0) {
-            r_command = try std.fmt.allocPrint(self.allocator, "tmux new-session -s {s}", .{name});
-            return r_command;
+            return try std.fmt.allocPrint(self.allocator, "tmux new-session -s {s}", .{app_name});
         }
 
-        // Enter a specific directory and run command
         if (standalone) {
-            r_command = try std.fmt.allocPrint(self.allocator, "tmux new-window -t {s} -n {s} && tmux send-keys -t {s}:{d} `{s}` C-m", .{ name, name, name, index, command });
+            r_command = try std.fmt.allocPrint(self.allocator, "tmux new-window -t {s} -n {s} && tmux send-keys -t {s}:{d} `{s}` C-m", .{ app_name, name, name, index, command });
 
             return r_command;
         }
 
-        r_command = try std.fmt.allocPrint(self.allocator, "tmux new-window -t {s} -n {s} && tmux send-keys -t {s}:{d} `cd {s} && {s}` C-m", .{ name, name, name, index, location, command });
+        // CD to a dir as not standalone
+        r_command = try std.fmt.allocPrint(self.allocator, "tmux new-window -t {s} -n {s} && tmux send-keys -t {s}:{d} `cd {s} && {s}` C-m", .{ app_name, name, name, index, location, command });
         return r_command;
     }
 };
