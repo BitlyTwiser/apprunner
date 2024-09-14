@@ -1,6 +1,6 @@
 apps:
   - name: test1
-    command: ping google.com -n 5
+    command: ping google.com
     stand: true
     location: ./var/thing
   - name: test2

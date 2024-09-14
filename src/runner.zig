@@ -46,8 +46,7 @@ pub const Runner = struct {
     }
 
     pub fn spawner(self: *Self, apps: []config.App) !void {
-        // Add 1 for the additional spawner for the windows
-        var thread_pool = try self.allocator.alloc(std.Thread, apps.len + 1);
+        var thread_pool = try self.allocator.alloc(std.Thread, apps.len);
         for (apps, 0..) |app, i| {
             thread_pool[i] = try std.Thread.spawn(.{ .allocator = self.allocator }, spawnProcess, .{ self, app.name, app.stand, app.command, app.location, i });
         }
@@ -78,21 +77,29 @@ pub const Runner = struct {
     // tmux specific configurations
     // tmux new-window -t my_session -n 'Window4'
     // tmux send-keys -t my_session:3 'tail -f /var/log/syslog' C-m
+    // tmux rename-window -t my_session:0 'Window1'
     fn tmuxConfig(self: *Self, name: []const u8, standalone: bool, command: []const u8, location: []const u8, index: usize) ![]u8 {
         var r_command: []u8 = undefined;
 
         if (index == 0) {
-            return try std.fmt.allocPrint(self.allocator, "tmux new-session -s {s}", .{app_name});
+            if (standalone) {
+                r_command = try std.fmt.allocPrint(self.allocator, "tmux new-session -s {s} \\; rename-window -t {s}:{d} {s} \\; send-keys -t {s}:{d} '{s}' C-m", .{ app_name, app_name, index, name, name, index, command });
+            } else {
+                r_command = try std.fmt.allocPrint(self.allocator, "tmux new-session -s {s} \\; rename-window -t {s}:{d} {s} \\; send-keys -t {s}:{d} 'cd {s} \\; {s}' C-m", .{ app_name, app_name, index, name, name, index, location, command });
+            }
+
+            return r_command;
         }
 
         if (standalone) {
-            r_command = try std.fmt.allocPrint(self.allocator, "tmux new-window -t {s} -n {s} && tmux send-keys -t {s}:{d} `{s}` C-m", .{ app_name, name, name, index, command });
+            r_command = try std.fmt.allocPrint(self.allocator, "tmux new-window -t {s} -n {s} \\; send-keys -t {s}:{d} '{s}' C-m", .{ app_name, name, name, index, command });
 
             return r_command;
         }
 
         // CD to a dir as not standalone
-        r_command = try std.fmt.allocPrint(self.allocator, "tmux new-window -t {s} -n {s} && tmux send-keys -t {s}:{d} `cd {s} && {s}` C-m", .{ app_name, name, name, index, location, command });
+        r_command = try std.fmt.allocPrint(self.allocator, "tmux new-window -t {s} -n {s} \\; send-keys -t {s}:{d} 'cd {s} && {s}' C-m", .{ app_name, name, name, index, location, command });
+
         return r_command;
     }
 };
