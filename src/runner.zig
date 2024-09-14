@@ -87,7 +87,7 @@ pub const Runner = struct {
             if (standalone) {
                 r_command = try std.fmt.allocPrint(self.allocator, "tmux new-session -s {s} \\; rename-window -t {s}:{d} {s} \\; send-keys -t {s}:{s} '{s}' enter", .{ app_name, app_name, index, name, app_name, name, command });
             } else {
-                r_command = try std.fmt.allocPrint(self.allocator, "tmux new-session -s {s} \\; rename-window -t {s}:{d} {s} \\; send-keys -t {s}:{s} 'cd {s} && {s}' enter", .{ app_name, app_name, index, name, app_name, name, location, command });
+                r_command = try std.fmt.allocPrint(self.allocator, "tmux new-session -c {s} -s {s} \\; rename-window -t {s}:{d} {s} \\; send-keys -t {s}:{s} '{s}' enter", .{ location, app_name, app_name, index, name, app_name, name, command });
             }
 
             return r_command;
@@ -100,7 +100,7 @@ pub const Runner = struct {
         }
 
         // CD to a dir as not standalone
-        r_command = try std.fmt.allocPrint(self.allocator, "tmux new-window -t {s} -n {s} \\; send-keys -t {s}:{s} 'cd {s} && {s}' enter", .{ app_name, name, app_name, name, location, command });
+        r_command = try std.fmt.allocPrint(self.allocator, "tmux new-window -c {s} -t {s} -n {s} \\; send-keys -t {s}:{s} '{s}' enter", .{ location, app_name, name, app_name, name, command });
 
         return r_command;
     }

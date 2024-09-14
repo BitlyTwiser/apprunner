@@ -5,5 +5,5 @@ apps:
     location: ./var/thing
   - name: test2
     command: ls -la
-    stand: true
-    location: ""
+    stand: false 
+    location: /var/log
