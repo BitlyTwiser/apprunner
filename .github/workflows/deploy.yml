@@ -87,7 +87,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./apprunner.zip
+          asset_path: ./apprunner_linux.zip
           asset_name: apprunner${{ steps.version_date.outputs.date }}_binary_linux.zip
           asset_content_type: application/zip
 
@@ -99,6 +99,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./apprunner.zip
+          asset_path: ./apprunner_macos.zip
           asset_name: apprunner${{ steps.version_date.outputs.date }}_binary_macos.zip
           asset_content_type: application/zip
