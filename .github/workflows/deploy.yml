@@ -49,6 +49,13 @@ jobs:
           zig build -p apprunner_macos/--release=fast -Dtarget=x86_64-macos
           zip -r apprunner_macos.zip apprunner_macos
 
+      # MacOS Binary Creation Apple Silicon
+      - name: Package and create binary for MacOS Apple Silicon
+        run: |
+          mkdir -p apprunner_macos_aarch64
+          zig build -p apprunner_macos_aarch64/ --release=fast -Dtarget=aarch64-macos
+          zip -r apprunner_macos_aarch64.zip apprunner_macos_aarch64
+
       # Changelog generation
       - name: Create changelog
         env:
@@ -101,4 +108,16 @@ jobs:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./apprunner_macos.zip
           asset_name: apprunner${{ steps.version_date.outputs.date }}_binary_macos.zip
+          asset_content_type: application/zip
+
+      # Upload binaries (MacOS Apple Silicon)
+      - name: Upload Apprunner Binary MacOS 
+        id: upload-apprunner-binary-mac-aarch64
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./apprunner_macos_aarch64.zip
+          asset_name: apprunner${{ steps.version_date.outputs.date }}_binary_macos_aarch64.zip
           asset_content_type: application/zip
