@@ -1,6 +1,10 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const os = std.os;
+const assert = std.debug.assert;
 const config = @import("./config.zig");
 const runner = @import("./runner.zig");
+const shell_err = runner.ShellError;
 
 // Functions from std
 const print = std.debug.print;
@@ -23,8 +27,53 @@ pub fn main() !void {
     defer allocator.free(results.apps);
 
     // Spawns all threads and waits
-    var run = try runner.Runner.init(allocator);
+    var run = runner.Runner.init(allocator) catch |err| {
+        switch (err) {
+            runner.ShellError.ShellNotFound => {
+                print("error finding appropriate shell to run tmux commands. Please change shells and try again", .{});
+            },
+        }
+        return;
+    };
     try run.spawner(results.apps);
+
+    // Listen for the exit events on ctrl+c to gracefully exit
+    try setAbortSignalHandler(handleAbortSignal);
+}
+
+// Gracefully exit on signal termination events
+fn setAbortSignalHandler(comptime handler: *const fn () void) !void {
+    if (builtin.os.tag == .windows) {
+        const handler_routine = struct {
+            fn handler_routine(dwCtrlType: os.windows.DWORD) callconv(os.windows.WINAPI) os.windows.BOOL {
+                if (dwCtrlType == os.windows.CTRL_C_EVENT) {
+                    handler();
+                    return os.windows.TRUE;
+                } else {
+                    return os.windows.FALSE;
+                }
+            }
+        }.handler_routine;
+        try os.windows.SetConsoleCtrlHandler(handler_routine, true);
+    } else {
+        const internal_handler = struct {
+            fn internal_handler(sig: c_int) callconv(.C) void {
+                assert(sig == os.linux.SIG.INT);
+                handler();
+            }
+        }.internal_handler;
+        const act = os.linux.Sigaction{
+            .handler = .{ .handler = internal_handler },
+            .mask = os.linux.empty_sigset,
+            .flags = 0,
+        };
+        _ = os.linux.sigaction(os.linux.SIG.INT, &act, null);
+    }
+}
+
+fn handleAbortSignal() void {
+    print("Goodbye! Thanks for using apprunner", .{});
+    std.process.exit(0);
 }
 
 test "simple test" {}
