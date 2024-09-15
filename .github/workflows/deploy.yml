@@ -52,7 +52,7 @@ jobs:
       # MacOS Binary Creation
       - name: Package and create binary for MacOS 
         run: |
-          mkdir -p apprunner_windows 
+          mkdir -p apprunner_macos 
           zig build -p apprunner_windows/--release=fast -Dtarget=x86_64-macos
           zip -r apprunner_macos.zip apprunner_macos
 
