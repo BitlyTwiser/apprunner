@@ -43,32 +43,18 @@ pub fn main() !void {
 
 // Gracefully exit on signal termination events
 fn setAbortSignalHandler(comptime handler: *const fn () void) !void {
-    if (builtin.os.tag == .windows) {
-        const handler_routine = struct {
-            fn handler_routine(dwCtrlType: os.windows.DWORD) callconv(os.windows.WINAPI) os.windows.BOOL {
-                if (dwCtrlType == os.windows.CTRL_C_EVENT) {
-                    handler();
-                    return os.windows.TRUE;
-                } else {
-                    return os.windows.FALSE;
-                }
-            }
-        }.handler_routine;
-        try os.windows.SetConsoleCtrlHandler(handler_routine, true);
-    } else {
-        const internal_handler = struct {
-            fn internal_handler(sig: c_int) callconv(.C) void {
-                assert(sig == os.linux.SIG.INT);
-                handler();
-            }
-        }.internal_handler;
-        const act = os.linux.Sigaction{
-            .handler = .{ .handler = internal_handler },
-            .mask = os.linux.empty_sigset,
-            .flags = 0,
-        };
-        _ = os.linux.sigaction(os.linux.SIG.INT, &act, null);
-    }
+    const internal_handler = struct {
+        fn internal_handler(sig: c_int) callconv(.C) void {
+            assert(sig == os.linux.SIG.INT);
+            handler();
+        }
+    }.internal_handler;
+    const act = os.linux.Sigaction{
+        .handler = .{ .handler = internal_handler },
+        .mask = os.linux.empty_sigset,
+        .flags = 0,
+    };
+    _ = os.linux.sigaction(os.linux.SIG.INT, &act, null);
 }
 
 fn handleAbortSignal() void {

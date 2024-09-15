@@ -5,7 +5,6 @@ const print = std.debug.print;
 
 const app_name = "apprunner";
 const default_shell_nix = "bash";
-const default_shell_win = "powershell";
 const cmdline_path = "/proc/$$/cmdline";
 
 pub const ShellError = error{ShellNotFound};
@@ -15,7 +14,6 @@ const shellType = enum {
     zsh,
     sh,
     bash,
-    powershell,
 };
 
 /// Runner is responsible for running all commands parsed from the yaml to TMUX
@@ -97,23 +95,20 @@ pub const Runner = struct {
     }
 };
 
-/// determines which base command to run depending on execution environment. I.e. windows/linux/macOS
+/// determines which base command to run depending on execution environment. I.e. linux/macOS
 fn commandBase(allocator: std.mem.Allocator) ![]const u8 {
     return try captureShell(allocator);
 }
 
 // Process sub-command for running command when spawning shell
 fn subCommand() ![]const u8 {
-    if (builtin.os.tag == .windows) return "-Command";
+    // if (builtin.os.tag == .windows) return "-Command"; //No windows support
 
     return "-c";
 }
 
 // In nix systems, parse cmdline_path above to fine current shell.
-// Windows its assumed powershell lol
 fn captureShell(allocator: std.mem.Allocator) ![]const u8 {
-    if (builtin.os.tag == .windows) return "powershell";
-
     const env_map = try std.process.getEnvMap(allocator);
     const shell = env_map.get("SHELL");
 

@@ -42,18 +42,11 @@ jobs:
           zig build -p apprunner_linux/ --release=fast -Dtarget=x86_64-linux
           zip -r apprunner_linux.zip apprunner_linux
 
-      # Windows binary creation
-      - name: Package and create binary for Windows
-        run: |
-          mkdir -p apprunner_windows 
-          zig build -p apprunner_windows/--release=fast -Dtarget=x86_64-windows
-          zip -r apprunner_windows.zip apprunner_windows
-    
       # MacOS Binary Creation
       - name: Package and create binary for MacOS 
         run: |
           mkdir -p apprunner_macos 
-          zig build -p apprunner_windows/--release=fast -Dtarget=x86_64-macos
+          zig build -p apprunner_macos/--release=fast -Dtarget=x86_64-macos
           zip -r apprunner_macos.zip apprunner_macos
 
       # Changelog generation
@@ -85,18 +78,6 @@ jobs:
             ${{ steps.changelog.outputs.content }}
           draft: false
           prerelease: true
-
-      # Upload binaries (Windows)
-      - name: Upload Apprunner Binary Windows
-        id: upload-apprunner-binary-windows
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./apprunner.zip
-          asset_name: apprunner${{ steps.version_date.outputs.date }}_binary_windows.zip
-          asset_content_type: application/zip
 
       # Upload binaries (Linux)
       - name: Upload Apprunner Binary Linux 
