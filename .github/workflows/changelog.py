@@ -1,27 +1,43 @@
-# Note - This is not my original work. 
-# Credit where credit is due, checkout the original works here: https://github.com/portapack-mayhem/mayhem-firmware/blob/next/.github/workflows/changelog.py
 import os
 import sys
 
 import requests
 from datetime import datetime, timedelta, timezone
 
-# Set up your personal access token and the repository details
 token = os.environ.get('GH_TOKEN')
 repo_owner = "bitlytwiser"
 repo_name = "apprunner"
 
+# Get last two commits from main branch and compare. (Note: If this is the first commit ever, it would break until a 2nd commit is made)
 def print_stable_changelog():
-    print("Here")
-    url = f"compare/{changelog_from_last_commit}...next"
+    latest, second = get_last_two_commits()
+    url = f"compare/{second}...{latest}"
     commits = handle_get_request(url)
     for commit in commits["commits"]:
         # Print the commit details
         print(format_output(commit))
 
+def get_last_two_commits():
+    headers = {} if token is None else {"Authorization": f"Bearer {token}"}
+    url_base = f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits?per_page=2&sha=main"
+    response = requests.get(url_base, headers=headers)
+
+    if response.status_code == 200:
+        data = response.json()
+        if len(data) >= 2:
+            latest_commit_sha = data[0]["sha"]
+            previous_commit_sha = data[1]["sha"]
+            return latest_commit_sha, previous_commit_sha
+        else:
+            print("Not enough commits found.")
+            return None, None
+    else:
+        print(f"Request failed with status code: {response.status_code}")
+        return None, None
+
 def changelog_from_last_commit():
     headers = {} if token == None else {"Authorization": f"Bearer {token}"}
-    url_base = f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits/master"
+    url_base = f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits/main"
     response = requests.get(url_base, headers=headers)
 
     if response.status_code == 200:
