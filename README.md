@@ -10,7 +10,8 @@ Apprunner will build N number of named Tmux windows running the commands you pro
 
 # Prerequisites/Setup:
 1. You DO need Tmux for this: https://github.com/tmux/tmux/wiki
-2. Fill out the yaml
+2. Download the release for your system: https://github.com/BitlyTwiser/apprunner/releases
+3. Fill out the yaml
 example:
 ```
 apps:
