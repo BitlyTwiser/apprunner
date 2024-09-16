@@ -12,6 +12,7 @@ repo_owner = "bitlytwiser"
 repo_name = "apprunner"
 
 def print_stable_changelog():
+    print("Here")
     url = f"compare/{changelog_from_last_commit}...next"
     commits = handle_get_request(url)
     for commit in commits["commits"]:
@@ -56,4 +57,4 @@ def format_output(commit):
     author = commit["author"]["login"] if commit["author"] and "login" in commit["author"] else commit["commit"]["author"]["name"]
     return '- ' + commit["sha"][:8] + ' - @' + author + ': ' + message_lines[0]
 
-print_stable_changelog
+print_stable_changelog()
