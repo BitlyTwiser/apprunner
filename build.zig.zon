@@ -24,8 +24,8 @@
     // internet connectivity.
     .dependencies = .{
         .ymlz = .{
-            .url = "https://github.com/pwbh/ymlz/archive/refs/tags/0.3.3.tar.gz",
-            .hash = "122066bde791372e092cf04ccf2b827e9b1164a2ea23c7187d71d2d2f39252777f25",
+            .url = "https://github.com/pwbh/ymlz/archive/refs/tags/0.3.4.tar.gz",
+            .hash = "1220ed1736bf5f543a77a7bf205d884fa5c5e9393ab99f03401018c8af5792cf8373",
         },
     },
     .paths = .{

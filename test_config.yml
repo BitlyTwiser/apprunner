@@ -1,9 +1,9 @@
 apps:
   - name: test1
     command: ping google.com
-    stand: true
-    location: ./var/thing
+    standalone: true
+    start_location: ./var/thing
   - name: test2
     command: ls -la
-    stand: false 
-    location: /var/log
+    standalone: false 
+    start_location: /var/log

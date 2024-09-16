@@ -39,9 +39,9 @@ pub const Runner = struct {
     pub fn spawner(self: *Self, apps: []config.App) !void {
         var thread_pool = try self.allocator.alloc(std.Thread, apps.len);
         for (apps, 0..) |app, i| {
-            thread_pool[i] = try std.Thread.spawn(.{ .allocator = self.allocator }, spawnProcess, .{ self, app.name, app.stand, app.command, app.location, i });
+            thread_pool[i] = try std.Thread.spawn(.{ .allocator = self.allocator }, spawnProcess, .{ self, app.name, app.standalone, app.command, app.start_location, i });
             // Its too fast lol - Try sleeping for a moment to avoid missing shells
-            std.time.sleep(5000 * 3);
+            std.time.sleep(100000 * 1024);
         }
 
         // Wait for all threads to stop program from exiting
@@ -118,7 +118,7 @@ fn captureShell(allocator: std.mem.Allocator) ![]const u8 {
         // Shell type is always last
         return @as([]const u8, split_shell.first());
     } else {
-        // Posix systems/macos do not have /proc, so the commands below fail to check the shell
+        // Posix systems/macos do not have /proc, so the commands below fail to check the shell. So we fallback to bash on macos
         if (builtin.os.tag == .macos) return "bash";
 
         const file = try std.fs.openFileAbsolute(cmdline_path, .{ .mode = .read_only });

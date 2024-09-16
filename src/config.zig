@@ -1,11 +1,12 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const Ymlz = @import("ymlz").Ymlz;
 
 pub const App = struct {
     name: []const u8,
     command: []const u8,
-    stand: bool,
-    location: []const u8, // For specific folder, if not standalone
+    standalone: bool,
+    start_location: []const u8, // For specific folder, if not standalone
 };
 
 pub const Config = struct {

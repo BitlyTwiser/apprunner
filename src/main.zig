@@ -62,4 +62,4 @@ fn handleAbortSignal() void {
     std.process.exit(0);
 }
 
-test "simple test" {}
+test "test yaml file parsing" {}

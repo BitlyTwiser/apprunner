@@ -4,10 +4,11 @@
 <img src="/assets/apprunner.jpg" width="450" height="500">
 </div>
 
-The premise is simple, add stuff to the yml file. This *stuff* is commands, the location to run the command from (if not standalone) and the name.
-Run the code, and you will get N number of Tmux windows, with the name field from the yaml alloted to it, running the command you passed in.
+The premise is simple: add commands to the yml file,run the program, get windows running your stuff! 
 
-# Prerequisites:
+Apprunner will build N number of named Tmux windows running the commands you provide. If given a path (and not standalone), the window will be opened a that directory location.
+
+# Prerequisites/Setup:
 1. You DO need Tmux for this: https://github.com/tmux/tmux/wiki
 2. Fill out the yaml
 example:
@@ -15,15 +16,15 @@ example:
 apps:
   - name: test1
     command: ping google.com
-    stand: true
-    location: ./var/thing
+    standalone: true
+    start_location: ./var/thing
   - name: test2
     command: ls -la
-    stand: false 
-    location: /var/log
+    standalone: false 
+    start_location: /var/log
 ```
-3. $$$ run stuff
-4. Terminal with commands will appear:
+3. run `./apprunner`
+4. Terminal with your set commands will appear:
 ![Screenshot](/assets/screenshot1.png)
 ![Screenshot](/assets/screenshot2.png)
 
@@ -34,3 +35,8 @@ Example from the CLI:
 tmux new-session -s test_sesh \; rename-window -t test_sesh:0 inner_window \; send-keys -t test_sesh:inner_window 'echo "hi" |base64' enter
 ```
 This will spawn a new tmux session, create & rename the window, and run the command echoing hi to base64 encode.
+
+
+## Roadmap:
+- Multi-pane per window support. Instead of windows only, allow for user to select a split pane layout (i.e. split pane horizontal/vertical etc..)
+- Save/Store runtime progress (like tmux resurrect)
