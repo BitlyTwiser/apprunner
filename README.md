@@ -24,7 +24,7 @@ apps:
     standalone: false 
     start_location: /var/log
 ```
-3. run `./apprunner`
+3. run `./apprunner <path_to_yaml_config>`
 4. Terminal with your set commands will appear:
 ![Screenshot](/assets/screenshot1.png)
 ![Screenshot](/assets/screenshot2.png)
