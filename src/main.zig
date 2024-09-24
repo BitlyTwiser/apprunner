@@ -4,10 +4,14 @@ const os = std.os;
 const assert = std.debug.assert;
 const config = @import("./config.zig");
 const runner = @import("./runner.zig");
+const resurrect = @import("./resurrect.zig").Resurrect;
 const shell_err = runner.ShellError;
+const snek = @import("snek").Snek;
 
 // Functions from std
 const print = std.debug.print;
+
+const CliArguments = struct { config_path: ?[]const u8, restore: ?bool };
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -17,28 +21,35 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    if (args.len < 2) {
-        print("Please provide a path to the config.yml file", .{});
-        return;
+    var cli = try snek(CliArguments).init(allocator);
+    const parsed_cli = try cli.parse();
+
+    if (parsed_cli.config_path) |config_path| {
+        var yml_config = try config.YamlConfig.init(allocator, config_path);
+        const results = try yml_config.parseConfig();
+        defer allocator.free(results.apps);
+
+        // Spawns all threads and waits
+        var run = runner.Runner.init(allocator) catch |err| {
+            switch (err) {
+                runner.ShellError.ShellNotFound => {
+                    print("error finding appropriate shell to run tmux commands. Please change shells and try again", .{});
+                },
+            }
+            return;
+        };
+        try run.spawner(results.apps);
+
+        // Listen for the exit events on ctrl+c to gracefully exit
+        try setAbortSignalHandler(handleAbortSignal);
+    } else if (parsed_cli.restore != null) {
+        const res = try resurrect.init();
+
+        // Restore stored session after crash
+        try res.restoreSession();
+    } else {
+        print("No commands specified, please a config file path or restore flag as an argument to apprunner. Use apprunner -h for help\n", .{});
     }
-
-    var yml_config = try config.YamlConfig.init(allocator, args[1]);
-    const results = try yml_config.parseConfig();
-    defer allocator.free(results.apps);
-
-    // Spawns all threads and waits
-    var run = runner.Runner.init(allocator) catch |err| {
-        switch (err) {
-            runner.ShellError.ShellNotFound => {
-                print("error finding appropriate shell to run tmux commands. Please change shells and try again", .{});
-            },
-        }
-        return;
-    };
-    try run.spawner(results.apps);
-
-    // Listen for the exit events on ctrl+c to gracefully exit
-    try setAbortSignalHandler(handleAbortSignal);
 }
 
 // Gracefully exit on signal termination events

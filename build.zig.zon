@@ -27,6 +27,14 @@
             .url = "https://github.com/pwbh/ymlz/archive/refs/tags/0.3.4.tar.gz",
             .hash = "1220ed1736bf5f543a77a7bf205d884fa5c5e9393ab99f03401018c8af5792cf8373",
         },
+        .zdotenv = .{
+            .url = "https://github.com/BitlyTwiser/zdotenv/archive/refs/tags/v0.1.0.tar.gz",
+            .hash = "122016a556577271f89aea3e7a052abb7c9731f7478ac350e1e64b07c6620418528f",
+        },
+        .snek = .{
+            .url = "https://github.com/BitlyTwiser/snek/archive/refs/tags/v0.1.0.tar.gz",
+            .hash = "1220ca47f02a4dbfffa8b24e242b7f4d9af0690e1dc14fc2c2475d74ceeec9150ee1",
+        },
     },
     .paths = .{
         "build.zig",
