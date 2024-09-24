@@ -43,7 +43,7 @@ pub fn main() !void {
         // Listen for the exit events on ctrl+c to gracefully exit
         try setAbortSignalHandler(handleAbortSignal);
     } else if (parsed_cli.restore != null) {
-        const res = try resurrect.init();
+        const res = try resurrect.init(allocator);
 
         // Restore stored session after crash
         try res.restoreSession();

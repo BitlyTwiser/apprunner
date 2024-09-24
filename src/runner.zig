@@ -41,7 +41,7 @@ const sessionBuilder = struct {
 
     /// Adds a location on disk where the -c command is called. i.e. starting location of the shell
     fn withLocation(self: *Self, location: []const u8) !*Self {
-        return try self.write(location);
+        return try self.write(try std.fmt.allocPrint(self.allocator, "-c {s}", .{location}));
     }
 
     /// writes any data to the string
@@ -144,9 +144,10 @@ pub const Runner = struct {
         var r_command: []u8 = undefined;
         if (index == 0) {
             if (standalone) {
-                r_command = try std.fmt.allocPrint(self.allocator, "tmux new-session -s {s} \\; rename-window -t {s}:{d} {s} \\; send-keys -t {s}:{s} '{s}' enter", .{ app_name, app_name, index, name, app_name, name, command });
+                r_command = try std.fmt.allocPrint(self.allocator, "{s} -s {s} \\; rename-window -t {s}:{d} {s} \\; send-keys -t {s}:{s} '{s}' enter", .{ builder.print(), app_name, app_name, index, name, app_name, name, command });
             } else {
-                r_command = try std.fmt.allocPrint(self.allocator, "tmux new-session -c {s} -s {s} \\; rename-window -t {s}:{d} {s} \\; send-keys -t {s}:{s} '{s}' enter", .{ location, app_name, app_name, index, name, app_name, name, command });
+                builder = (try builder.withLocation(location)).*;
+                r_command = try std.fmt.allocPrint(self.allocator, "{s} -s {s} \\; rename-window -t {s}:{d} {s} \\; send-keys -t {s}:{s} '{s}' enter", .{ builder.print(), app_name, app_name, index, name, app_name, name, command });
             }
 
             return r_command;
