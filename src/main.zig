@@ -25,6 +25,11 @@ pub fn main() !void {
     const parsed_cli = try cli.parse();
 
     if (parsed_cli.config_path) |config_path| {
+        if (parsed_cli.restore != null) {
+            print("{s}", .{"Cannot use restore flag with config path.\n"});
+            return;
+        }
+
         var yml_config = try config.YamlConfig.init(allocator, config_path);
         const results = try yml_config.parseConfig();
         defer allocator.free(results.apps);
@@ -33,7 +38,7 @@ pub fn main() !void {
         var run = runner.Runner.init(allocator) catch |err| {
             switch (err) {
                 runner.ShellError.ShellNotFound => {
-                    print("error finding appropriate shell to run tmux commands. Please change shells and try again", .{});
+                    print("error finding appropriate shell to run tmux commands. Please change shells and try again\n", .{});
                 },
             }
             return;
@@ -42,13 +47,13 @@ pub fn main() !void {
 
         // Listen for the exit events on ctrl+c to gracefully exit
         try setAbortSignalHandler(handleAbortSignal);
-    } else if (parsed_cli.restore != null) {
+    } else if (parsed_cli.restore != null and parsed_cli.config_path == null) {
         const res = try resurrect.init(allocator);
 
         // Restore stored session after crash
         try res.restoreSession();
     } else {
-        print("No commands specified, please a config file path or restore flag as an argument to apprunner. Use apprunner -h for help\n", .{});
+        print("Invalid commands specified, please pass either config file path or restore flag as an argument to apprunner. Use apprunner -h for help\n", .{});
     }
 }
 
