@@ -29,8 +29,7 @@ pub fn main() !void {
         _ = try res.storeSessionData();
     } else {
         try res.printWarning();
-        // Sleep for a moment to actually display the warning to the user
-        // Sleep for 3 seconds
+        // Sleep for 3 seconds to display the warning to the user
         std.time.sleep(std.time.ns_per_s * 3);
     }
 
