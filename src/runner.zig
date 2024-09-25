@@ -10,11 +10,25 @@ const cmdline_path = "/proc/$$/cmdline";
 
 pub const ShellError = error{ShellNotFound};
 
-// Default shells
-const shellType = enum {
-    zsh,
-    sh,
-    bash,
+const session_base = "tmux new-session";
+const window_base = "tmux new-window";
+
+const baseType = union(enum) {
+    session,
+    window,
+
+    const Self = @This();
+
+    fn baseTypeString(self: Self) []const u8 {
+        switch (self) {
+            .session => {
+                return session_base;
+            },
+            .window => {
+                return window_base;
+            },
+        }
+    }
 };
 
 // This is dumb - we can utilize a buffer [][]const u8. If the slice is growing out of brounds, call a grow function to allocate more space to the allotment of the given string.
@@ -22,17 +36,16 @@ const shellType = enum {
 const sessionBuilder = struct {
     allocator: std.mem.Allocator,
     command_path: []const u8, // Full, built command path
+    base_type: baseType,
     const Self = @This();
-    const session_base = "tmux new-session";
 
-    fn init(allocator: std.mem.Allocator) !Self {
+    fn init(allocator: std.mem.Allocator, base_type: baseType) !Self {
         return Self{
             .allocator = allocator,
-            .command_path = session_base, // Start with session base to build off of.
+            .command_path = base_type.baseTypeString(),
+            .base_type = base_type,
         };
     }
-
-    // Note: The only reason the functions are named and not just Write() is for ease of reading. They both just wrap write for now
 
     /// Appends env values into the session start
     fn withEnv(self: *Self, env_data: []const u8) !*Self {
@@ -46,7 +59,7 @@ const sessionBuilder = struct {
 
     /// writes any data to the string
     fn write(self: *Self, s: []const u8) !*Self {
-        self.command_path = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ self.command_path, s });
+        self.command_path = try std.fmt.allocPrint(self.allocator, "{s} {s}", .{ self.command_path, s });
 
         return self;
     }
@@ -113,36 +126,15 @@ pub const Runner = struct {
     // tmux specific configurations
     // You can send commands by name, not only index: tmux new-session -s test_sesh \; rename-window -t test_sesh:0 tester \; send-keys -t test_sesh:tester 'echo "hi" |base64' enter
     fn tmuxConfig(self: *Self, name: []const u8, standalone: bool, command: []const u8, location: []const u8, env_path: ?[]const u8, index: usize) ![]u8 {
-        var builder = try sessionBuilder.init(self.allocator);
-        // The session base, this expands in the given cases of env values being passed and is eventually insrted into the primary strings below
-        // If the env  path is present, use the path to add .env values
-        if (env_path) |env| {
-            var file: std.fs.File = undefined;
-            // Check if an absolute path else treat as relative
-            if (std.fs.path.isAbsolute(env)) {
-                file = try std.fs.openFileAbsolute(env, .{ .mode = .read_only });
-            } else {
-                file = try std.fs.cwd().openFile(env, .{ .mode = .read_only });
-            }
-
-            defer file.close();
-
-            var zdotenv = try zdotenv_parser.init(self.allocator, file);
-            // Deallocate the memory from parse
-            defer zdotenv.deinit();
-
-            const env_data = try zdotenv.parse();
-
-            // Add data onto the sesison builder for .env data
-            const formatted_data = try self.formatEnvData(env_data);
-
-            for (formatted_data) |value| {
-                builder = (try builder.withEnv(value)).*;
-            }
-        }
-
         var r_command: []u8 = undefined;
+        // index zero applies to only 1 app in the yaml or the initial app to spawn the sessions. After the session is spawned we need to also feed the .env into the windows
+        // This leads to some duplication as can be seen below. Perhaps there is a better method around this we can investigate going forward
         if (index == 0) {
+            var builder = try sessionBuilder.init(self.allocator, .session);
+            // Load env data for injection
+            if (env_path) |env| {
+                builder = (try self.loadEnvData(env, &builder)).*;
+            }
             if (standalone) {
                 r_command = try std.fmt.allocPrint(self.allocator, "{s} -s {s} \\; rename-window -t {s}:{d} {s} \\; send-keys -t {s}:{s} '{s}' enter", .{ builder.print(), app_name, app_name, index, name, app_name, name, command });
             } else {
@@ -153,15 +145,52 @@ pub const Runner = struct {
             return r_command;
         }
 
+        // Not a huge fan of the duplication here.
+        var builder = try sessionBuilder.init(self.allocator, .window);
+        if (env_path) |env| {
+            builder = (try self.loadEnvData(env, &builder)).*;
+        }
+
         if (standalone) {
-            r_command = try std.fmt.allocPrint(self.allocator, "tmux new-window -t {s} -n {s} \\; send-keys -t {s}:{s} '{s}' enter", .{ app_name, name, app_name, name, command });
+            r_command = try std.fmt.allocPrint(self.allocator, "{s} -t {s} -n {s} \\; send-keys -t {s}:{s} '{s}' enter", .{ builder.print(), app_name, name, app_name, name, command });
 
             return r_command;
         }
 
-        r_command = try std.fmt.allocPrint(self.allocator, "tmux new-window -c {s} -t {s} -n {s} \\; send-keys -t {s}:{s} '{s}' enter", .{ location, app_name, name, app_name, name, command });
+        builder = (try builder.withLocation(location)).*;
+
+        r_command = try std.fmt.allocPrint(self.allocator, "{s} -c {s} -t {s} -n {s} \\; send-keys -t {s}:{s} '{s}' enter", .{ builder.print(), location, app_name, name, app_name, name, command });
 
         return r_command;
+    }
+
+    fn loadEnvData(self: *Self, env_path: []const u8, builder: *sessionBuilder) !*sessionBuilder {
+        // The session base, this expands in the given cases of env values being passed and is eventually insrted into the primary strings below
+        // If the env  path is present, use the path to add .env values
+        var file: std.fs.File = undefined;
+        // Check if an absolute path else treat as relative
+        if (std.fs.path.isAbsolute(env_path)) {
+            file = try std.fs.openFileAbsolute(env_path, .{ .mode = .read_only });
+        } else {
+            file = try std.fs.cwd().openFile(env_path, .{ .mode = .read_only });
+        }
+
+        defer file.close();
+
+        var zdotenv = try zdotenv_parser.init(self.allocator, file);
+        // Deallocate the memory from parse
+        defer zdotenv.deinit();
+
+        const env_data = try zdotenv.parse();
+
+        // Add data onto the session builder for .env data
+        const formatted_data = try self.formatEnvData(env_data);
+
+        for (formatted_data) |value| {
+            builder.* = (try builder.withEnv(value)).*;
+        }
+
+        return builder;
     }
 
     // Format the incoming .env data as `VARIABLE=value’

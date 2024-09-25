@@ -24,6 +24,7 @@ pub fn main() !void {
     var cli = try snek(CliArguments).init(allocator);
     const parsed_cli = try cli.parse();
 
+    // Cli application path parsing. Either restore or run the application normally using config file path
     if (parsed_cli.config_path) |config_path| {
         if (parsed_cli.restore != null) {
             print("{s}", .{"Cannot use restore flag with config path.\n"});
