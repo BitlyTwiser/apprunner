@@ -21,6 +21,19 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
+    // Check tmux version and print warning if we cannot start resurrect
+    const res = try resurrect.init(allocator);
+    const res_supported = try res.checkSupportedVersion();
+    if (res_supported) {
+        // Start the thread to store session data every N minutes/seconds
+        _ = try res.storeSessionData();
+    } else {
+        try res.printWarning();
+        // Sleep for a moment to actually display the warning to the user
+        // Sleep for 3 seconds
+        std.time.sleep(std.time.ns_per_s * 3);
+    }
+
     var cli = try snek(CliArguments).init(allocator);
     const parsed_cli = try cli.parse();
 
@@ -49,8 +62,12 @@ pub fn main() !void {
         // Listen for the exit events on ctrl+c to gracefully exit
         try setAbortSignalHandler(handleAbortSignal);
     } else if (parsed_cli.restore != null and parsed_cli.config_path == null) {
-        const res = try resurrect.init(allocator);
+        // Do not allow resurrection on non-supported version of tmux
+        if (!res_supported) {
+            print("Invalid version of Tmux. You must use Tmux version 1.9 or greater for resurrection", .{});
 
+            return;
+        }
         // Restore stored session after crash
         try res.restoreSession();
     } else {
