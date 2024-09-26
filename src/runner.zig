@@ -4,7 +4,7 @@ const config = @import("./config.zig");
 const zdotenv_parser = @import("zdotenv").Parser;
 const print = std.debug.print;
 
-const app_name = "apprunner";
+pub const app_name = "apprunner"; // This is public as we import the app_name (session name) into resurrect for controlling which sessions we capture.
 const default_shell_nix = "bash";
 const cmdline_path = "/proc/$$/cmdline";
 

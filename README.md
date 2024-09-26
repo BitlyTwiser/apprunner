@@ -44,10 +44,11 @@ Standard configuration path
 ```
 ./zig-out/bin/apprunner -config_path="test_config.yml"
 ```
-restore:
+restore from Resurrect config file:
 ``` 
 ./zig-out/bin/apprunner -restore=true
 ```
+Note: restore will *ony* work if you have been running the application and you are using a Tmux version > 1.9! The tmux commands that are necessary to dump the sessions do not exist prior to version 1.9.
 
 # Environment Variables
 If you desire to insert a specific set of environment variables to the tmux session at runtime you can add the `env_path` to the yaml file.
@@ -98,7 +99,34 @@ apps:
 ```
 
 
+### Tmux Resurrect
+Resurrect runs automatically unless disabled with the `-disabled=true` flag.
+
+example:
+```
+./apprunner -config_path="<file_path>" -disabled=true
+```
+
+This will print a warning that disabled is set and resurrect will not run
+
+#### Config file storage:
+Resurrect stores a config file at `$HOME/.tmux/resurrect/config.json`
+
+If the $HOME env var is not set for some reason, then its stored at `/home/.tmux/resurrect/config.json`
+
+The folder and file are created automatically at application runtime.
+
+#### Important Notes:
+Apprunner will track user sessions that have been created within the apprunner session. It is important to note that this does *not* aply to *all* sessions that might be running!
+
+Apprunner *only* tracks the sessions that was spawned with Apprunner (i.e. by running the program you spawn the session). If you make windows and panes *within* your apprunner sessions, those will also be captured. 
+
+If you create a new shell and start a *new* tmux sessions outside of app runner this would *not* be captured! Only the Apprunner sessions will be caught by the resurrect code :)
+
+If the config.json file is removed, a new file will be created at runtime.
+
+
 ## Roadmap:
-- [ ] Multi-pane per window support. Instead of windows only, allow for user to select a split pane layout (i.e. split pane horizontal/vertical etc..)
+- [ ] Multi-pane per window support. Instead of windows only, allow for user to select a split pane layout (i.e. split pane horizontal/vertical etc..) in the Yaml file (Note - Resurrect will capture panes by default if they are created manually in the sessions)
 - [X] Save/Store runtime progress (like tmux resurrect)
 - [X] Env file loading (provide an .env and have the values loaded into the application)

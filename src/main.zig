@@ -1,17 +1,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const os = std.os;
-const assert = std.debug.assert;
 const config = @import("./config.zig");
 const runner = @import("./runner.zig");
 const resurrect = @import("./resurrect.zig").Resurrect;
 const shell_err = runner.ShellError;
 const snek = @import("snek").Snek;
 
-// Functions from std
 const print = std.debug.print;
+const assert = std.debug.assert;
 
-const CliArguments = struct { config_path: ?[]const u8, restore: ?bool };
+const CliArguments = struct { config_path: ?[]const u8, restore: ?bool, disable: ?bool };
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -21,20 +20,28 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
+    var cli = try snek(CliArguments).init(allocator);
+    const parsed_cli = try cli.parse();
+
     // Check tmux version and print warning if we cannot start resurrect
     const res = try resurrect.init(allocator);
     const res_supported = try res.checkSupportedVersion();
-    if (res_supported) {
-        // Start the thread to store session data every N minutes/seconds
-        _ = try res.storeSessionData();
-    } else {
-        try res.printWarning();
-        // Sleep for 3 seconds to display the warning to the user
-        std.time.sleep(std.time.ns_per_s * 3);
-    }
 
-    var cli = try snek(CliArguments).init(allocator);
-    const parsed_cli = try cli.parse();
+    const disabled = (parsed_cli.disable orelse false);
+
+    // If disabled is not set, we obviously defualt to false
+    if (res_supported and !disabled) {
+        // Start the thread to store session data every N minutes/seconds
+        try res.saveThread();
+    } else {
+        if (disabled) {
+            try res.printDisabledWarning();
+        } else {
+            try res.printWarning();
+            // Sleep for 3 seconds to display the warning to the user
+            std.time.sleep(std.time.ns_per_s * 3);
+        }
+    }
 
     // Cli application path parsing. Either restore or run the application normally using config file path
     if (parsed_cli.config_path) |config_path| {
