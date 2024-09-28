@@ -33,16 +33,16 @@ const resurrectDumpType = union(enum) {
     const Self = @This();
 
     // We will need to tokenize the commands since its [][]const u8 that is passed to runCommand
-    fn format(self: Self) []const u8 {
+    fn format(self: Self) []const []const u8 {
         switch (self) {
             .window => {
-                return "list-windows -a -F";
+                return &[_][]const u8{ "list-windows", "-a", "-F" };
             },
             .state => {
-                return "display-message -p";
+                return &[_][]const u8{ "display-message", "-p" };
             },
             .pane => {
-                return "list-panes -a -F";
+                return &[_][]const u8{ "list-panes", "-a", "-F" };
             },
         }
     }
@@ -78,7 +78,6 @@ const ResurrectFileData = struct {
         _ = self;
         // run the tmux command and parse all the fields of data for paneData out into the struct
         const d = res_type;
-        var buf: [2048]u8 = undefined;
 
         // ensure that the declaration exists else we error
         const has_decl = @hasDecl(T, "formatTmuxData");
@@ -86,8 +85,20 @@ const ResurrectFileData = struct {
 
         var data: T = undefined;
 
-        const command = try std.fmt.bufPrint(&buf, "{s}{s}", .{ d.format(), data.formatTmuxData() });
-        const tmux_data = try runCommand(&[_][]const u8{ "tmux", command }, allocator);
+        // Below is a little unique - build out the []const []const u8 for the runCommand else commands fail to parse for some reason (with multiple flags?)
+        const formatted_data = d.format();
+        const a = try allocator.alloc([]const u8, formatted_data.len + 2);
+
+        a[0] = "tmux";
+
+        // Parse the formatted data and place in the respective sections in the formatted_data
+        for (formatted_data, 1..) |value, i| {
+            a[i] = value;
+        }
+
+        a[a.len - 1] = data.formatTmuxData();
+
+        const tmux_data = try runCommand(a, std.heap.page_allocator);
 
         // Probably only a single line, but iterate all the same and reset struct each time in case the data changes
         var split_line = std.mem.split(u8, tmux_data, format_delimiter);
@@ -135,7 +146,7 @@ const paneData = struct {
     // Called in the parsing function, this must exist
     fn formatTmuxData(self: Self) []const u8 {
         _ = self;
-        return "#{session_name}" ++ format_delimiter ++ "#{window_index}" ++ format_delimiter ++ "#{window_active}" ++ format_delimiter ++ ":#{window_flags}" ++ format_delimiter ++ "#{pane_index}" ++ format_delimiter ++ "#{pane_title}" ++ format_delimiter ++ ":#{pane_current_path}" ++ format_delimiter ++ "#{pane_active}" ++ format_delimiter ++ "#{pane_current_command}" ++ format_delimiter ++ "#{pane_pid}" ++ format_delimiter ++ "#{history_size}";
+        return "'" ++ "#{session_name}" ++ format_delimiter ++ "#{window_index}" ++ format_delimiter ++ "#{window_active}" ++ format_delimiter ++ ":#{window_flags}" ++ format_delimiter ++ "#{pane_index}" ++ format_delimiter ++ "#{pane_title}" ++ format_delimiter ++ ":#{pane_current_path}" ++ format_delimiter ++ "#{pane_active}" ++ format_delimiter ++ "#{pane_current_command}" ++ format_delimiter ++ "#{pane_pid}" ++ format_delimiter ++ "#{history_size}" ++ "'";
     }
 };
 
@@ -148,7 +159,7 @@ const windowData = struct {
     // Called in the parsing function, this must exist
     fn formatTmuxData(self: Self) []const u8 {
         _ = self;
-        return "#{session_name}" ++ format_delimiter ++ "#{window_index}" ++ format_delimiter ++ "#{window_active}" ++ format_delimiter ++ ":#{window_flags}" ++ format_delimiter ++ "#{window_layout}";
+        return "'" ++ "#{session_name}" ++ format_delimiter ++ "#{window_index}" ++ format_delimiter ++ "#{window_active}" ++ format_delimiter ++ ":#{window_flags}" ++ format_delimiter ++ "#{window_layout}" ++ "'";
     }
 };
 
@@ -161,7 +172,7 @@ const stateData = struct {
     // Called in the parsing function, this must exist
     fn formatTmuxData(self: Self) []const u8 {
         _ = self;
-        return "#{client_session}" ++ format_delimiter ++ "#{client_last_session}";
+        return "'" ++ "#{client_session}" ++ format_delimiter ++ "#{client_last_session}" ++ "'";
     }
 };
 
@@ -320,7 +331,7 @@ pub const Resurrect = struct {
     }
 };
 
-// Generic helpers not stored in a struct
+// run arbitrary cli commands and collect stderr & stdout
 fn runCommand(command_data: []const []const u8, allocator: std.mem.Allocator) ![]u8 {
     var child = std.process.Child.init(command_data, allocator);
     child.stdin_behavior = .Pipe;
@@ -333,6 +344,9 @@ fn runCommand(command_data: []const []const u8, allocator: std.mem.Allocator) ![
 
     try child.collectOutput(&stdout, &stderr, 1024 * 2 * 2);
     _ = try child.wait();
+
+    print("data: {s}\n", .{stdout.items});
+    print("error: {s}\n", .{stderr.items});
 
     return stdout.items;
 }
@@ -365,6 +379,12 @@ test "print warning on bad version" {
     std.debug.assert(res_supported);
     try res.printWarning();
 }
+
+// test "command" {
+//     const data = try runCommand(&[_][]const u8{ "tmux", "list-windows", "-a", "-F", "'#{session_name}\\t#{window_index}\\t#{window_active}\\t:#{window_flags}\\t#{window_layout}'" }, std.heap.page_allocator);
+
+//     print("{s}", .{data});
+// }
 
 fn test_sig() !void {}
 
