@@ -1,6 +1,7 @@
 const std = @import("std");
 const runner = @import("runner.zig");
 
+const assert = std.debug.assert;
 const print = std.debug.print;
 
 // The proper version is 1.9. We use 19 for a int comparison below
@@ -19,7 +20,10 @@ const color_red = csi ++ "31m"; // red
 
 // Resurrect File paths
 const resurrect_folder_path = "/.tmux/resurrect";
+const resurrect_file_name = "config.json";
 const resurrect_wait_time = std.time.ms_per_min * 2;
+const format_delimiter: []const u8 = "\\t"; // Used to seperate the lines in the formatters from the returned tmux data
+const format_delimiter_u8 = '\t';
 
 const resurrectDumpType = union(enum) {
     window,
@@ -28,26 +32,21 @@ const resurrectDumpType = union(enum) {
 
     const Self = @This();
 
-    fn format(self: Self, formatted_data: []const u8) []const u8 {
-        var buf: [1024]u8 = undefined;
-        var base: []const u8 = undefined;
+    // We will need to tokenize the commands since its [][]const u8 that is passed to runCommand
+    fn format(self: Self) []const u8 {
         switch (self) {
             .window => {
-                base = "tmux list-windows -a -F ";
+                return "list-windows -a -F";
             },
             .state => {
-                base = "tmux display-message -p ";
+                return "display-message -p";
             },
             .pane => {
-                base = "tmux list-panes -a -F ";
+                return "list-panes -a -F";
             },
         }
-
-        return try std.fmt.bufPrint(&buf, "{s}{s}", .{ base, formatted_data });
     }
 };
-
-// Perhaps an interface to serailize the data from each struct type below
 
 // Resurrect File structure - Used for serializing the struct data into and out of the stored resurrect file.
 const ResurrectFileData = struct {
@@ -57,79 +56,119 @@ const ResurrectFileData = struct {
 
     const Self = @This();
 
+    // Sets all the fields using the parsing from each specific data type
+    fn set(self: *Self, allocator: std.mem.Allocator) !void {
+        // Set all values from structs after reading tmux data
+        // Look at making this a more generic interface itself so we can avoid this duplication
+
+        @field(self, "pane_data") = try self.parse(paneData, .pane, allocator);
+        @field(self, "window_data") = try self.parse(windowData, .window, allocator);
+        @field(self, "state_data") = try self.parse(stateData, .state, allocator);
+    }
+
     /// Performs JSON serialization and file storage from the resurrectFileData
-    fn stringify(self: Self, allocator: std.mem.Allocator) !void {
+    fn stringify(self: Self, allocator: std.mem.Allocator) ![]u8 {
         var string = std.ArrayList(u8).init(allocator);
         try std.json.stringify(self, .{}, string.writer());
+
+        return string.items;
+    }
+
+    fn parse(self: *Self, comptime T: type, res_type: resurrectDumpType, allocator: std.mem.Allocator) !T {
+        _ = self;
+        // run the tmux command and parse all the fields of data for paneData out into the struct
+        const d = res_type;
+        var buf: [2048]u8 = undefined;
+
+        // ensure that the declaration exists else we error
+        const has_decl = @hasDecl(T, "formatTmuxData");
+        assert(has_decl);
+
+        var data: T = undefined;
+
+        const command = try std.fmt.bufPrint(&buf, "{s}{s}", .{ d.format(), data.formatTmuxData() });
+        const tmux_data = try runCommand(&[_][]const u8{ "tmux", command }, allocator);
+
+        // Probably only a single line, but iterate all the same and reset struct each time in case the data changes
+        var split_line = std.mem.split(u8, tmux_data, format_delimiter);
+
+        // struct values have to be perfectly in line with the format function
+        // i.e. the formatPane func returns values at given indicies after splitting on the delimiter. This must match the struct value placement of the struct we are assigning the data to.
+        const parsed = @typeInfo(@TypeOf(T));
+        if (parsed == .Struct) {
+            inline for (parsed.Struct.fields) |field| {
+                var line = split_line.next() orelse "";
+                print("parsing line - {s}\n", .{line});
+                line = std.mem.trim(u8, line, " ");
+
+                @field(&data, field.name) = line;
+            }
+        }
+
+        return data;
     }
 };
 
 // Structs for panes, state, and window session management
+
+// Pane data and Window data share this
+const genericWindowStruct = struct {
+    session_name: []const u8 = "",
+    window_index: u8 = 0,
+    window_name: []const u8 = "",
+    window_active: bool = false,
+    window_flags: []const u8 = "",
+};
+
 const paneData = struct {
-    window_data: genericWindowStruct,
-    pane_index: u8,
-    pane_title: []const u8,
-    pane_current_path: []const u8,
-    pane_active: bool,
-    pane_current_command: []const u8,
-    pane_pid: []const u8,
-    history_size: []const u8,
+    window_data: genericWindowStruct = genericWindowStruct{},
+    pane_index: u8 = 0,
+    pane_title: []const u8 = "",
+    pane_current_path: []const u8 = "",
+    pane_active: bool = false,
+    pane_current_command: []const u8 = "",
+    pane_pid: []const u8 = "",
+    history_size: []const u8 = "",
 
     const Self = @This();
 
-    fn parse(self: Self) !Self {
-        return self;
-    }
-
-    fn runTmuxCommand(self: Self) []const u8 {
+    // Called in the parsing function, this must exist
+    fn formatTmuxData(self: Self) []const u8 {
         _ = self;
-
-        return "";
+        return "#{session_name}" ++ format_delimiter ++ "#{window_index}" ++ format_delimiter ++ "#{window_active}" ++ format_delimiter ++ ":#{window_flags}" ++ format_delimiter ++ "#{pane_index}" ++ format_delimiter ++ "#{pane_title}" ++ format_delimiter ++ ":#{pane_current_path}" ++ format_delimiter ++ "#{pane_active}" ++ format_delimiter ++ "#{pane_current_command}" ++ format_delimiter ++ "#{pane_pid}" ++ format_delimiter ++ "#{history_size}";
     }
 };
 
 const windowData = struct {
-    window_data: genericWindowStruct,
-    window_layout: []const u8,
+    window_data: genericWindowStruct = genericWindowStruct{},
+    window_layout: []const u8 = "",
 
     const Self = @This();
 
-    fn parse(self: Self) !Self {
-        return self;
-    }
-
-    fn runTmuxCommand(self: Self) []const u8 {
+    // Called in the parsing function, this must exist
+    fn formatTmuxData(self: Self) []const u8 {
         _ = self;
-
-        return "";
+        return "#{session_name}" ++ format_delimiter ++ "#{window_index}" ++ format_delimiter ++ "#{window_active}" ++ format_delimiter ++ ":#{window_flags}" ++ format_delimiter ++ "#{window_layout}";
     }
 };
 
 const stateData = struct {
-    client_session: []const u8,
-    client_last_sessions: []const u8,
+    client_session: []const u8 = "",
+    client_last_sessions: []const u8 = "",
 
     const Self = @This();
 
-    fn parse(self: Self) !Self {
-        return self;
-    }
-
-    fn runTmuxCommand(self: Self) []const u8 {
+    // Called in the parsing function, this must exist
+    fn formatTmuxData(self: Self) []const u8 {
         _ = self;
-
-        return "";
+        return "#{client_session}" ++ format_delimiter ++ "#{client_last_session}";
     }
 };
-
-// Pane data and Window data share this
-const genericWindowStruct = struct { session_name: []const u8, window_index: u8, window_name: []const u8, window_active: bool, window_flags: []const u8 };
 
 /// Resurrect is in charge of snapshotting current user state and restoring state on load.
 pub const Resurrect = struct {
     allocator: std.mem.Allocator,
     const Self = @This();
-    const format_delimiter = '\t'; // Used to seperate the lines in the formatters from the returned tmux data
 
     pub fn init(allocator: std.mem.Allocator) !Self {
         return Self{
@@ -151,6 +190,19 @@ pub const Resurrect = struct {
     /// ran in a thread on start of the application which stores session data every N Seconds/Minutes
     /// This is a rolling backup - no copies are stored
     pub fn save(self: Self) !void {
+        // Write err to logfile
+        errdefer |err| {
+            var file: ?std.fs.File = undefined;
+            file = std.fs.createFileAbsolute("/var/log/resurrect_error.log", .{}) catch null;
+
+            if (file) |f| {
+                var buf: [1024]u8 = undefined;
+                const err_string = std.fmt.bufPrint(&buf, "error: {any}", .{err}) catch "";
+                _ = f.write(err_string) catch print("error writing file on save", .{});
+                f.close();
+            }
+        }
+
         // Created during the processes below in order to ascertain the actual path where the resurrect file will be installed
         var definitive_dir_path: ?[]const u8 = null;
         const env = try std.process.getEnvMap(self.allocator);
@@ -164,19 +216,29 @@ pub const Resurrect = struct {
             definitive_dir_path = folder_path;
         }
 
-        std.fs.makeDirAbsolute(definitive_dir_path.?) catch |e| {
+        var dir = std.fs.Dir{ .fd = 0 };
+        _ = dir.makeOpenPath(definitive_dir_path.?, .{}) catch |e| {
             switch (e) {
                 error.PathAlreadyExists => {
+                    print("Here?\n", .{});
                     // Do nothing, this is good.
                 },
                 else => { // For any other error type, we want to return here.
-                    return e;
+                    print("return {any}\n", .{e});
+                    return;
                 },
             }
+            return;
         };
 
+        var buf: [2048]u8 = undefined;
+        const file_path = try std.fmt.bufPrint(&buf, "{s}/{s}", .{ definitive_dir_path.?, resurrect_file_name });
+
+        var file = try std.fs.createFileAbsolute(file_path, .{});
+        defer file.close();
+
         // Dump performs all IO/parsing of Tmux commands to aggregate the necessary data points to store the configuration file
-        try self.dump();
+        try self.dump(file);
 
         // Wait N minutes before running again
         std.time.sleep(resurrect_wait_time);
@@ -186,26 +248,18 @@ pub const Resurrect = struct {
 
     // Helper functions for capturing sessions/state data from Tmux
     //  Functionality is (somewhat) replicated from here: https://github.com/tmux-plugins/tmux-resurrect/blob/cff343cf9e81983d3da0c8562b01616f12e8d548/scripts/save.sh
-    fn dump(self: Self) !void {
+    fn dump(self: Self, file: std.fs.File) !void {
         // Dump all 3 formatters here into the respective structs, stringify the data, write to file
-        _ = self;
-        // Use res dump type and dump data for all 3 types
-    }
+        var file_data = ResurrectFileData{ .pane_data = paneData{}, .window_data = windowData{}, .state_data = stateData{} };
 
-    // Formatters - These are used for interacting with the tmux API to format the exracted data for storing
-    fn formatPane(self: Self) []const u8 {
-        _ = self;
-        return "pane" ++ format_delimiter ++ "#{session_name}" ++ format_delimiter ++ "#{window_index}" ++ format_delimiter ++ "#{window_active}" ++ format_delimiter ++ ":#{window_flags}" ++ format_delimiter ++ "#{pane_index}" ++ format_delimiter ++ "#{pane_title}" ++ format_delimiter ++ ":#{pane_current_path}" ++ format_delimiter ++ "#{pane_active}" ++ format_delimiter ++ "#{pane_current_command}" ++ format_delimiter ++ "#{pane_pid}" ++ format_delimiter ++ "#{history_size}";
-    }
+        // Set all file data
+        try file_data.set(self.allocator);
 
-    fn formatWindow(self: Self) []const u8 {
-        _ = self;
-        return "window" ++ format_delimiter ++ "#{session_name}" ++ format_delimiter ++ "#{window_index}" ++ format_delimiter ++ "#{window_active}" ++ format_delimiter ++ ":#{window_flags}" ++ format_delimiter ++ "#{window_layout}";
-    }
+        // Capture JSON data and pass to file
+        const json_parsed_data = try file_data.stringify(self.allocator);
 
-    fn formatState(self: Self) []const u8 {
-        _ = self;
-        return "state" ++ format_delimiter ++ "#{client_session}" ++ format_delimiter + "#{client_last_session}";
+        //  Dump JSON data to given file.
+        try file.writer().writeAll(json_parsed_data);
     }
 
     /// Check the current tmux version to ensure we can run resurrect
@@ -224,10 +278,7 @@ pub const Resurrect = struct {
 
     // Run tmux -V to get  version and collect output
     fn getTmuxVersion(self: Self) ![]u8 {
-        var commands = try self.allocator.alloc([]const u8, 2);
-        commands[0] = "tmux";
-        commands[1] = "-V";
-        return runCommand(commands, self.allocator);
+        return runCommand(&[_][]const u8{ "tmux", "-V" }, self.allocator);
     }
 
     // CLeans incoming tmux version string from tmux 3.2a => 32 etc..
@@ -270,7 +321,7 @@ pub const Resurrect = struct {
 };
 
 // Generic helpers not stored in a struct
-fn runCommand(command_data: [][]const u8, allocator: std.mem.Allocator) ![]u8 {
+fn runCommand(command_data: []const []const u8, allocator: std.mem.Allocator) ![]u8 {
     var child = std.process.Child.init(command_data, allocator);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Pipe;
@@ -313,4 +364,13 @@ test "print warning on bad version" {
 
     std.debug.assert(res_supported);
     try res.printWarning();
+}
+
+fn test_sig() !void {}
+
+test test_sig {
+    var res = try Resurrect.init(std.heap.page_allocator);
+
+    // Should end up with save file
+    try res.save();
 }

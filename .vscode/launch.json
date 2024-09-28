@@ -9,5 +9,13 @@
           "args": ["-config_path=test_config.yml"],
           "cwd": "${workspaceFolder}",
       },
+      {
+          "type": "lldb",
+          "request": "launch",
+          "name": "Debug test",
+          "program": "${workspaceFolder}/zig-out/bin/test",
+          "args": [],
+          "cwd": "${workspaceFolder}",
+      },
   ]
 }
