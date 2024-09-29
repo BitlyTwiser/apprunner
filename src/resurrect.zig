@@ -50,8 +50,8 @@ const resurrectDumpType = union(enum) {
 
 // Resurrect File structure - Used for serializing the struct data into and out of the stored resurrect file.
 const ResurrectFileData = struct {
-    pane_data: paneData,
-    window_data: windowData,
+    pane_data: []paneData,
+    window_data: []windowData,
     state_data: stateData,
 
     const Self = @This();
@@ -61,8 +61,8 @@ const ResurrectFileData = struct {
         // Set all values from structs after reading tmux data
         // Look at making this a more generic interface itself so we can avoid this duplication
 
-        @field(self, "pane_data") = try self.parse(paneData, .pane, allocator);
-        @field(self, "window_data") = try self.parse(windowData, .window, allocator);
+        @field(self, "pane_data") = try self.parse([]paneData, .pane, allocator);
+        @field(self, "window_data") = try self.parse([]windowData, .window, allocator);
         @field(self, "state_data") = try self.parse(stateData, .state, allocator);
     }
 
@@ -74,11 +74,76 @@ const ResurrectFileData = struct {
         return string.items;
     }
 
+    // re-write to avoid setting all of the cli output initially. First split on the types to determine if we have a slice or struct
+    // THat would mean changing the tyes of ResurrectData back to slices
     fn parse(self: *Self, comptime T: type, res_type: resurrectDumpType, allocator: std.mem.Allocator) !T {
-        _ = self;
-        // run the tmux command and parse all the fields of data for paneData out into the struct
-        const d = res_type;
+        var data: T = undefined;
+        const parsed = @typeInfo(@TypeOf(data));
 
+        // We only expect slices (pointer) or Sructs in this particular case since we control the type upstream
+        switch (parsed) {
+            .Struct => {
+                inline for (parsed.Struct.fields) |field| {
+                    var iter = try self.innerParseData(@TypeOf(data), res_type, allocator);
+                    while (iter.next()) |split_line| {
+                        // After all the splitting, parse the individual fields
+                        var i_split = std.mem.split(u8, split_line, format_delimiter);
+
+                        while (i_split.next()) |i_line| {
+                            print("parsing line - {s}\n", .{i_line});
+                            const i_line_t = std.mem.trim(u8, i_line, " ");
+
+                            // Now find the type of i_line_t and switch on that. Then parse for int, bool, or const etc..
+                            switch (@typeInfo(field.type)) {
+                                .Int => {
+                                    const parsed_int = try std.fmt.parseInt(field.type, i_line_t, 10);
+                                    @field(&data, field.name) = parsed_int;
+                                },
+                                .Bool => {
+                                    @field(&data, field.name) = try self.parseBool(i_line_t);
+                                },
+                                .Pointer => {
+                                    @field(&data, field.name) = i_line_t;
+                                },
+                                else => {
+                                    unreachable; // We do not support anything else here! This is a rather static set of fields
+                                },
+                            }
+                        }
+                    }
+                }
+            },
+            .Pointer => {
+                const child = parsed.Pointer.child;
+                var child_slice = std.ArrayList(child).init(allocator);
+                // Parse the child resursively, this should hit the .Struct block to deserialize the values into the slice
+                const parsed_child = try self.parse(child, res_type, allocator);
+
+                // Build an array list of items of the child since the type is a Pointer
+                try child_slice.append(parsed_child);
+
+                // Now set the slice to the ascertained, destructered items
+                data = child_slice.items;
+            },
+            else => {},
+        }
+
+        return data;
+    }
+
+    fn parseBool(self: Self, parse_value: []const u8) !bool {
+        _ = self;
+        if (std.mem.eql(u8, parse_value, "True") or std.mem.eql(u8, parse_value, "true") or std.mem.eql(u8, parse_value, "On") or std.mem.eql(u8, parse_value, "on")) {
+            return true;
+        } else if (std.mem.eql(u8, parse_value, "False") or std.mem.eql(u8, parse_value, "false") or std.mem.eql(u8, parse_value, "Off") or std.mem.eql(u8, parse_value, "off")) {
+            return false;
+        }
+
+        return error.NotBoolean;
+    }
+
+    fn innerParseData(self: Self, comptime T: type, resDumpType: resurrectDumpType, allocator: std.mem.Allocator) !std.mem.SplitIterator(u8, .sequence) {
+        _ = self;
         // ensure that the declaration exists else we error
         const has_decl = @hasDecl(T, "formatTmuxData");
         assert(has_decl);
@@ -86,9 +151,10 @@ const ResurrectFileData = struct {
         var data: T = undefined;
 
         // Below is a little unique - build out the []const []const u8 for the runCommand else commands fail to parse for some reason (with multiple flags?)
-        const formatted_data = d.format();
+        const formatted_data = resDumpType.format();
         const a = try allocator.alloc([]const u8, formatted_data.len + 2);
 
+        // First command is always a binary
         a[0] = "tmux";
 
         // Parse the formatted data and place in the respective sections in the formatted_data
@@ -100,39 +166,16 @@ const ResurrectFileData = struct {
 
         const tmux_data = try runCommand(a, std.heap.page_allocator);
 
-        // Probably only a single line, but iterate all the same and reset struct each time in case the data changes
-        var split_line = std.mem.split(u8, tmux_data, format_delimiter);
-
-        // struct values have to be perfectly in line with the format function
-        // i.e. the formatPane func returns values at given indicies after splitting on the delimiter. This must match the struct value placement of the struct we are assigning the data to.
-        const parsed = @typeInfo(@TypeOf(T));
-        if (parsed == .Struct) {
-            inline for (parsed.Struct.fields) |field| {
-                var line = split_line.next() orelse "";
-                print("parsing line - {s}\n", .{line});
-                line = std.mem.trim(u8, line, " ");
-
-                @field(&data, field.name) = line;
-            }
-        }
-
-        return data;
+        return std.mem.split(u8, tmux_data, "\n");
     }
 };
 
-// Structs for panes, state, and window session management
-
-// Pane data and Window data share this
-const genericWindowStruct = struct {
+const paneData = struct {
     session_name: []const u8 = "",
     window_index: u8 = 0,
     window_name: []const u8 = "",
     window_active: bool = false,
     window_flags: []const u8 = "",
-};
-
-const paneData = struct {
-    window_data: genericWindowStruct = genericWindowStruct{},
     pane_index: u8 = 0,
     pane_title: []const u8 = "",
     pane_current_path: []const u8 = "",
@@ -151,7 +194,11 @@ const paneData = struct {
 };
 
 const windowData = struct {
-    window_data: genericWindowStruct = genericWindowStruct{},
+    session_name: []const u8 = "",
+    window_index: u8 = 0,
+    window_name: []const u8 = "",
+    window_active: bool = false,
+    window_flags: []const u8 = "",
     window_layout: []const u8 = "",
 
     const Self = @This();
@@ -261,7 +308,7 @@ pub const Resurrect = struct {
     //  Functionality is (somewhat) replicated from here: https://github.com/tmux-plugins/tmux-resurrect/blob/cff343cf9e81983d3da0c8562b01616f12e8d548/scripts/save.sh
     fn dump(self: Self, file: std.fs.File) !void {
         // Dump all 3 formatters here into the respective structs, stringify the data, write to file
-        var file_data = ResurrectFileData{ .pane_data = paneData{}, .window_data = windowData{}, .state_data = stateData{} };
+        var file_data = ResurrectFileData{ .pane_data = &[_]paneData{}, .window_data = &[_]windowData{}, .state_data = stateData{} };
 
         // Set all file data
         try file_data.set(self.allocator);
@@ -344,9 +391,6 @@ fn runCommand(command_data: []const []const u8, allocator: std.mem.Allocator) ![
 
     try child.collectOutput(&stdout, &stderr, 1024 * 2 * 2);
     _ = try child.wait();
-
-    print("data: {s}\n", .{stdout.items});
-    print("error: {s}\n", .{stderr.items});
 
     return stdout.items;
 }
