@@ -61,9 +61,8 @@ const ResurrectFileData = struct {
 
     // Sets all the fields using the parsing from each specific data type
     fn set(self: *Self, allocator: std.mem.Allocator) !void {
-        // Set all values from structs after reading tmux data
-        // Look at making this a more generic interface itself so we can avoid this duplication
 
+        // Set all values from structs after reading tmux data
         @field(self, "pane_data") = try self.parse([]paneData, .pane, allocator);
         @field(self, "window_data") = try self.parse([]windowData, .window, allocator);
         @field(self, "state_data") = try self.parse(stateData, .state, allocator);
@@ -71,28 +70,16 @@ const ResurrectFileData = struct {
 
     /// Performs JSON serialization and file storage from the resurrectFileData
     fn convertJSON(self: *Self, allocator: std.mem.Allocator) ![]u8 {
-        var string = std.ArrayList(u8).init(allocator);
-        // print("{any}", .{self});
-        // Cannot strinify an empty struct. Unicode fails down the chain in this case
-        // Use parseFromSlice to do this in reverse after we read the file during the restore process
-        try std.json.stringify(self, .{}, string.writer());
+        var w = std.ArrayList(u8).init(allocator);
+        try std.json.stringify(self, .{}, w.writer());
 
-        return string.items;
+        return w.items;
     }
 
-    // This one is a little funky, iterate through *ALL* fields and determine if any are filld with data.
-    // fn isEmpty(self: Self) !bool {
-
-    //     const self_parsed = @typeInfo(@TypeOf(self));
-    //     inline for(self_parsed.Struct.fields) |field| {
-    //         field.
-    //     }
-    // }
-
-    // re-write to avoid setting all of the cli output initially. First split on the types to determine if we have a slice or struct
-    // THat would mean changing the tyes of ResurrectData back to slices
+    /// parse tmux data and set the value sof the given T type
     fn parse(self: *Self, comptime T: type, res_type: resurrectDumpType, allocator: std.mem.Allocator) !T {
         var data: T = undefined;
+        var data_set: bool = false;
         const parsed = @typeInfo(@TypeOf(data));
 
         // We only expect slices (pointer) or Sructs in this particular case since we control the type upstream
@@ -114,7 +101,8 @@ const ResurrectFileData = struct {
                                 if (std.mem.eql(u8, i_line, i_char)) continue :i;
                             }
 
-                            print("parsing line - {s}\n", .{i_line});
+                            // A control flag to ensure any data is written to avoid passing back undefined
+                            data_set = true;
 
                             const i_line_t = std.mem.trim(u8, i_line, " ");
 
@@ -151,7 +139,22 @@ const ResurrectFileData = struct {
                 // Now set the slice to the ascertained, destructered items
                 data = child_slice.items;
             },
-            else => {},
+            else => {
+                unreachable;
+            },
+        }
+
+        // This is a major hack. We set T to undefiend above which would cause issues when we skipped assiging data to field due to non-matching app name.
+        // So, we have to ensure data is set else an undefined struct is passed back causing havoc
+        if (!data_set) {
+            switch (parsed) {
+                .Struct => {
+                    return T{};
+                },
+                else => {
+                    return data;
+                },
+            }
         }
 
         return data;
@@ -463,20 +466,14 @@ test "print warning on bad version" {
     try res.printWarning();
 }
 
-// test "command" {
-//     const data = try runCommand(&[_][]const u8{ "tmux", "list-windows", "-a", "-F", "'#{session_name}\\t#{window_index}\\t#{window_active}\\t:#{window_flags}\\t#{window_layout}'" }, std.heap.page_allocator);
+fn test_sig() !void {}
 
-//     print("{s}", .{data});
-// }
+test test_sig {
+    var res = try Resurrect.init(std.heap.page_allocator);
 
-// fn test_sig() !void {}
-
-// test test_sig {
-//     var res = try Resurrect.init(std.heap.page_allocator);
-
-//     // Should end up with save file
-//     try res.save();
-// }
+    // Should end up with save file
+    try res.save();
+}
 
 test "Store some json data" {
     const file_data = ResurrectFileData{ .pane_data = &[_]paneData{}, .window_data = &[_]windowData{}, .state_data = stateData{} };
