@@ -21,9 +21,12 @@ const color_red = csi ++ "31m"; // red
 // Resurrect File paths
 const resurrect_folder_path = "/.tmux/resurrect";
 const resurrect_file_name = "config.json";
-const resurrect_wait_time = std.time.ms_per_min * 2;
+const resurrect_wait_time = std.time.ns_per_min * 2;
 const format_delimiter: []const u8 = "\\t"; // Used to seperate the lines in the formatters from the returned tmux data
 const format_delimiter_u8 = '\t';
+
+// Invalid char set
+const invalid_char_set = [_][]const u8{ "-", "*", " ", ",", "" };
 
 const resurrectDumpType = union(enum) {
     window,
@@ -67,12 +70,24 @@ const ResurrectFileData = struct {
     }
 
     /// Performs JSON serialization and file storage from the resurrectFileData
-    fn stringify(self: Self, allocator: std.mem.Allocator) ![]u8 {
+    fn convertJSON(self: *Self, allocator: std.mem.Allocator) ![]u8 {
         var string = std.ArrayList(u8).init(allocator);
+        // print("{any}", .{self});
+        // Cannot strinify an empty struct. Unicode fails down the chain in this case
+        // Use parseFromSlice to do this in reverse after we read the file during the restore process
         try std.json.stringify(self, .{}, string.writer());
 
         return string.items;
     }
+
+    // This one is a little funky, iterate through *ALL* fields and determine if any are filld with data.
+    // fn isEmpty(self: Self) !bool {
+
+    //     const self_parsed = @typeInfo(@TypeOf(self));
+    //     inline for(self_parsed.Struct.fields) |field| {
+    //         field.
+    //     }
+    // }
 
     // re-write to avoid setting all of the cli output initially. First split on the types to determine if we have a slice or struct
     // THat would mean changing the tyes of ResurrectData back to slices
@@ -85,12 +100,22 @@ const ResurrectFileData = struct {
             .Struct => {
                 inline for (parsed.Struct.fields) |field| {
                     var iter = try self.innerParseData(@TypeOf(data), res_type, allocator);
-                    while (iter.next()) |split_line| {
+                    var index: usize = 0;
+                    h: while (iter.next()) |split_line| {
                         // After all the splitting, parse the individual fields
-                        var i_split = std.mem.split(u8, split_line, format_delimiter);
+                        const split_line_i = std.mem.trim(u8, split_line, "'");
+                        var i_split = std.mem.split(u8, split_line_i, format_delimiter);
 
-                        while (i_split.next()) |i_line| {
+                        i: while (i_split.next()) |i_line| {
+                            // Check the actual application window name to ensure it matches app runner. if it does NOT, we skip to avoid conflicting with other windows of data
+                            if (index == 0 and !std.mem.eql(u8, i_line, runner.app_name)) break :h;
+
+                            for (invalid_char_set) |i_char| {
+                                if (std.mem.eql(u8, i_line, i_char)) continue :i;
+                            }
+
                             print("parsing line - {s}\n", .{i_line});
+
                             const i_line_t = std.mem.trim(u8, i_line, " ");
 
                             // Now find the type of i_line_t and switch on that. Then parse for int, bool, or const etc..
@@ -110,6 +135,7 @@ const ResurrectFileData = struct {
                                 },
                             }
                         }
+                        index += 1;
                     }
                 }
             },
@@ -170,6 +196,7 @@ const ResurrectFileData = struct {
     }
 };
 
+// Note: All data fields sart with session_name to avoid grabbing data from bad sessions (i.e. not apprunner sessions)
 const paneData = struct {
     session_name: []const u8 = "",
     window_index: u8 = 0,
@@ -189,7 +216,7 @@ const paneData = struct {
     // Called in the parsing function, this must exist
     fn formatTmuxData(self: Self) []const u8 {
         _ = self;
-        return "'" ++ "#{session_name}" ++ format_delimiter ++ "#{window_index}" ++ format_delimiter ++ "#{window_active}" ++ format_delimiter ++ ":#{window_flags}" ++ format_delimiter ++ "#{pane_index}" ++ format_delimiter ++ "#{pane_title}" ++ format_delimiter ++ ":#{pane_current_path}" ++ format_delimiter ++ "#{pane_active}" ++ format_delimiter ++ "#{pane_current_command}" ++ format_delimiter ++ "#{pane_pid}" ++ format_delimiter ++ "#{history_size}" ++ "'";
+        return "'" ++ "#{session_name}" ++ format_delimiter ++ "#{window_index}" ++ format_delimiter ++ "#{window_active}" ++ format_delimiter ++ "#{window_flags}" ++ format_delimiter ++ "#{pane_index}" ++ format_delimiter ++ "#{pane_title}" ++ format_delimiter ++ "#{pane_current_path}" ++ format_delimiter ++ "#{pane_active}" ++ format_delimiter ++ "#{pane_current_command}" ++ format_delimiter ++ "#{pane_pid}" ++ format_delimiter ++ "#{history_size}" ++ "'";
     }
 };
 
@@ -206,11 +233,12 @@ const windowData = struct {
     // Called in the parsing function, this must exist
     fn formatTmuxData(self: Self) []const u8 {
         _ = self;
-        return "'" ++ "#{session_name}" ++ format_delimiter ++ "#{window_index}" ++ format_delimiter ++ "#{window_active}" ++ format_delimiter ++ ":#{window_flags}" ++ format_delimiter ++ "#{window_layout}" ++ "'";
+        return "'" ++ "#{session_name}" ++ format_delimiter ++ "#{window_index}" ++ format_delimiter ++ "#{window_active}" ++ format_delimiter ++ "#{window_flags}" ++ format_delimiter ++ "#{window_layout}" ++ "'";
     }
 };
 
 const stateData = struct {
+    session_name: []const u8 = "",
     client_session: []const u8 = "",
     client_last_sessions: []const u8 = "",
 
@@ -219,7 +247,7 @@ const stateData = struct {
     // Called in the parsing function, this must exist
     fn formatTmuxData(self: Self) []const u8 {
         _ = self;
-        return "'" ++ "#{client_session}" ++ format_delimiter ++ "#{client_last_session}" ++ "'";
+        return "'" ++ "#{session_name}" ++ "#{client_session}" ++ format_delimiter ++ "#{client_last_session}" ++ "'";
     }
 };
 
@@ -236,7 +264,12 @@ pub const Resurrect = struct {
 
     /// Restores the given session data when called
     pub fn restoreSession(self: Self) !void {
-        _ = self;
+        // Read from the given config file location and de-serialize the json data from slice
+        const json_parsed = try std.json.parseFromSlice(ResurrectFileData, self.allocator, "", .{});
+        defer json_parsed.deinit();
+
+        // DO something with the value when we go to restore. This is the long process
+        print("{any}", .{json_parsed.value});
     }
 
     /// Wrapper around save to run this in a thread. Runs indefinitely until os.Exit()
@@ -245,13 +278,19 @@ pub const Resurrect = struct {
         t.detach();
     }
 
+    /// Ascertains the parsed json data in the form of the ResurrectFileData struct to restore the processes and sessions within
+    pub fn restore(self: Self, restore_data: ResurrectFileData) !void {
+        _ = self;
+        _ = restore_data;
+    }
+
     /// ran in a thread on start of the application which stores session data every N Seconds/Minutes
     /// This is a rolling backup - no copies are stored
     pub fn save(self: Self) !void {
         // Write err to logfile
         errdefer |err| {
             var file: ?std.fs.File = undefined;
-            file = std.fs.createFileAbsolute("/var/log/resurrect_error.log", .{}) catch null;
+            file = std.fs.createFileAbsolute("/var/tmp/apprunner_error.log", .{}) catch null;
 
             if (file) |f| {
                 var buf: [1024]u8 = undefined;
@@ -300,7 +339,7 @@ pub const Resurrect = struct {
 
         // Wait N minutes before running again
         std.time.sleep(resurrect_wait_time);
-        // Recurse
+        // Recurse and retry/perform save
         try self.save();
     }
 
@@ -314,7 +353,7 @@ pub const Resurrect = struct {
         try file_data.set(self.allocator);
 
         // Capture JSON data and pass to file
-        const json_parsed_data = try file_data.stringify(self.allocator);
+        const json_parsed_data = try file_data.convertJSON(self.allocator);
 
         //  Dump JSON data to given file.
         try file.writer().writeAll(json_parsed_data);
@@ -430,11 +469,20 @@ test "print warning on bad version" {
 //     print("{s}", .{data});
 // }
 
-fn test_sig() !void {}
+// fn test_sig() !void {}
 
-test test_sig {
-    var res = try Resurrect.init(std.heap.page_allocator);
+// test test_sig {
+//     var res = try Resurrect.init(std.heap.page_allocator);
 
-    // Should end up with save file
-    try res.save();
+//     // Should end up with save file
+//     try res.save();
+// }
+
+test "Store some json data" {
+    const file_data = ResurrectFileData{ .pane_data = &[_]paneData{}, .window_data = &[_]windowData{}, .state_data = stateData{} };
+    var w = std.ArrayList(u8).init(std.heap.page_allocator);
+    try std.json.stringify(file_data, .{}, w.writer());
+
+    // Test empty struct serializes as we expect
+    assert(std.mem.eql(u8, "{\"pane_data\":[],\"window_data\":[],\"state_data\":{\"session_name\":\"\",\"client_session\":\"\",\"client_last_sessions\":\"\"}}", w.items));
 }
