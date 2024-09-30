@@ -70,6 +70,7 @@ const ResurrectFileData = struct {
 
     /// Performs JSON serialization and file storage from the resurrectFileData
     fn convertJSON(self: *Self, allocator: std.mem.Allocator) ![]u8 {
+        print("after parse - {any}\n", .{self});
         var w = std.ArrayList(u8).init(allocator);
         try std.json.stringify(self, .{}, w.writer());
 
@@ -81,8 +82,6 @@ const ResurrectFileData = struct {
         var data: T = undefined;
         var data_set: bool = false;
         const parsed = @typeInfo(@TypeOf(data));
-
-        print("{any}", .{res_type});
 
         switch (parsed) {
             // We are only ever dealing with .Pointer types
@@ -151,7 +150,6 @@ const ResurrectFileData = struct {
         i_for: inline for (interface_parsed.Struct.fields, 0..) |field, index| {
             var invalid_char: bool = false;
             const line = iter_c.next() orelse "";
-            print("Line value: {s} - Index: {d}\n", .{ line, index });
 
             // We totally break out when the name does not match apprunner session
             if (index == 0 and !std.mem.eql(u8, line, runner.app_name)) break :i_for;
@@ -166,7 +164,6 @@ const ResurrectFileData = struct {
                 // Always dupe else the next pointer causes issues when iterating
                 const dupe_i_line = try allocator.dupe(u8, line);
 
-                print("Line {s}\n", .{dupe_i_line});
                 // Now find the type of i_line_t and switch on that. Then parse for int, bool, or const etc..
                 switch (@typeInfo(field.type)) {
                     .Int => {
@@ -225,7 +222,6 @@ const ResurrectFileData = struct {
 
         while (iter_c.next()) |l| {
             if (std.mem.eql(u8, l, "")) continue;
-            print("{s}\n", .{l});
             count += 1;
         }
 
@@ -354,11 +350,9 @@ pub const Resurrect = struct {
         _ = dir.makeOpenPath(definitive_dir_path.?, .{}) catch |e| {
             switch (e) {
                 error.PathAlreadyExists => {
-                    print("Here?\n", .{});
                     // Do nothing, this is good.
                 },
                 else => { // For any other error type, we want to return here.
-                    print("return {any}\n", .{e});
                     return;
                 },
             }
@@ -391,6 +385,8 @@ pub const Resurrect = struct {
 
         // Capture JSON data and pass to file
         const json_parsed_data = try file_data.convertJSON(self.allocator);
+
+        print("After parsing json: {any}", .{json_parsed_data});
 
         //  Dump JSON data to given file.
         try file.writer().writeAll(json_parsed_data);
