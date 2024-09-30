@@ -26,7 +26,7 @@ const format_delimiter: []const u8 = "\\t"; // Used to seperate the lines in the
 const format_delimiter_u8 = '\t';
 
 // Invalid char set
-const invalid_char_set = [_][]const u8{ "-", "*", " ", ",", "" };
+const invalid_char_set = [_][]const u8{ "-", " ", ",", "" };
 
 const resurrectDumpType = union(enum) {
     window,
@@ -55,7 +55,7 @@ const resurrectDumpType = union(enum) {
 const ResurrectFileData = struct {
     pane_data: []paneData,
     window_data: []windowData,
-    state_data: stateData,
+    state_data: []stateData,
 
     const Self = @This();
 
@@ -65,7 +65,7 @@ const ResurrectFileData = struct {
         // Set all values from structs after reading tmux data
         @field(self, "pane_data") = try self.parse([]paneData, .pane, allocator);
         @field(self, "window_data") = try self.parse([]windowData, .window, allocator);
-        @field(self, "state_data") = try self.parse(stateData, .state, allocator);
+        @field(self, "state_data") = try self.parse([]stateData, .state, allocator);
     }
 
     /// Performs JSON serialization and file storage from the resurrectFileData
@@ -82,24 +82,10 @@ const ResurrectFileData = struct {
         var data_set: bool = false;
         const parsed = @typeInfo(@TypeOf(data));
 
-        // If more than 2 values in the initiali ter, upgrade struct to a slice, recursively call function.
-        // In the .Pointer function, parse the string and pretend its a slice and remove the recursion
+        print("{any}", .{res_type});
 
-        // We only expect slices (pointer) or Sructs in this particular case since we control the type upstream
         switch (parsed) {
-            .Struct => {
-                // obtain the data from Tmux and use the iter below to parse
-                var iter = try self.innerTmuxData(@TypeOf(data), res_type, allocator);
-
-                // Iterate like a .Pointer type, else treat a singular struct and map data
-                if (self.iterLen(u8, iter) > 1) {
-                    // re-cast T as a slice and re-parse as a .Pointer type to grab all fields
-                    data = try self.parse([]T, res_type, allocator);
-                } else {
-                    // parse single line and set struct data
-                    data = try self.innerParseTmuxData(T, u8, std.mem.split(u8, iter.next() orelse "", format_delimiter, allocator, &data_set));
-                }
-            },
+            // We are only ever dealing with .Pointer types
             .Pointer => {
                 // Make ArrayList, iterate through all lines for each child and set value in ArrayList. 1 -> N values expected from the iter
                 const child = parsed.Pointer.child;
@@ -111,7 +97,9 @@ const ResurrectFileData = struct {
                     if (std.mem.eql(u8, line, "")) continue;
 
                     const split_line_i = std.mem.trim(u8, line, "'");
-                    const data_c = try self.innerParseTmuxData(child, u8, std.mem.split(u8, split_line_i, format_delimiter), allocator, &data_set);
+                    const it = std.mem.split(u8, split_line_i, format_delimiter);
+
+                    const data_c = try self.innerParseTmuxData(child, u8, it, allocator, &data_set);
 
                     try child_slice.append(data_c);
                 }
@@ -142,9 +130,9 @@ const ResurrectFileData = struct {
 
     fn parseBool(self: Self, parse_value: []const u8) !bool {
         _ = self;
-        if (std.mem.eql(u8, parse_value, "True") or std.mem.eql(u8, parse_value, "true") or std.mem.eql(u8, parse_value, "On") or std.mem.eql(u8, parse_value, "on")) {
+        if (std.mem.eql(u8, parse_value, "True") or std.mem.eql(u8, parse_value, "true") or std.mem.eql(u8, parse_value, "On") or std.mem.eql(u8, parse_value, "on") or std.mem.eql(u8, parse_value, "1")) {
             return true;
-        } else if (std.mem.eql(u8, parse_value, "False") or std.mem.eql(u8, parse_value, "false") or std.mem.eql(u8, parse_value, "Off") or std.mem.eql(u8, parse_value, "off")) {
+        } else if (std.mem.eql(u8, parse_value, "False") or std.mem.eql(u8, parse_value, "false") or std.mem.eql(u8, parse_value, "Off") or std.mem.eql(u8, parse_value, "off") or std.mem.eql(u8, parse_value, "0")) {
             return false;
         }
 
@@ -156,13 +144,14 @@ const ResurrectFileData = struct {
         // Avoid any case where somehow this is not a struct
         if (@typeInfo(T) != .Struct) return undefined;
 
+        var iter_c = iter;
         var interface: T = undefined;
         const interface_parsed = @typeInfo(@TypeOf(interface));
 
         i_for: inline for (interface_parsed.Struct.fields, 0..) |field, index| {
-            var iter_c = iter;
             var invalid_char: bool = false;
             const line = iter_c.next() orelse "";
+            print("Line value: {s} - Index: {d}\n", .{ line, index });
 
             // We totally break out when the name does not match apprunner session
             if (index == 0 and !std.mem.eql(u8, line, runner.app_name)) break :i_for;
@@ -176,6 +165,8 @@ const ResurrectFileData = struct {
                 data_set.* = true;
                 // Always dupe else the next pointer causes issues when iterating
                 const dupe_i_line = try allocator.dupe(u8, line);
+
+                print("Line {s}\n", .{dupe_i_line});
                 // Now find the type of i_line_t and switch on that. Then parse for int, bool, or const etc..
                 switch (@typeInfo(field.type)) {
                     .Int => {
@@ -262,7 +253,7 @@ const paneData = struct {
     // Called in the parsing function, this must exist
     fn formatTmuxData(self: Self) []const u8 {
         _ = self;
-        return "'" ++ "#{session_name}" ++ format_delimiter ++ "#{window_index}" ++ format_delimiter ++ "#{window_active}" ++ format_delimiter ++ "#{window_flags}" ++ format_delimiter ++ "#{pane_index}" ++ format_delimiter ++ "#{pane_title}" ++ format_delimiter ++ "#{pane_current_path}" ++ format_delimiter ++ "#{pane_active}" ++ format_delimiter ++ "#{pane_current_command}" ++ format_delimiter ++ "#{pane_pid}" ++ format_delimiter ++ "#{history_size}" ++ "'";
+        return "'" ++ "#{session_name}" ++ format_delimiter ++ "#{window_index}" ++ format_delimiter ++ "#{window_name}" ++ format_delimiter ++ "#{window_active}" ++ format_delimiter ++ "#{window_flags}" ++ format_delimiter ++ "#{pane_index}" ++ format_delimiter ++ "#{pane_title}" ++ format_delimiter ++ "#{pane_current_path}" ++ format_delimiter ++ "#{pane_active}" ++ format_delimiter ++ "#{pane_current_command}" ++ format_delimiter ++ "#{pane_pid}" ++ format_delimiter ++ "#{history_size}" ++ "'";
     }
 };
 
@@ -279,7 +270,7 @@ const windowData = struct {
     // Called in the parsing function, this must exist
     fn formatTmuxData(self: Self) []const u8 {
         _ = self;
-        return "'" ++ "#{session_name}" ++ format_delimiter ++ "#{window_index}" ++ format_delimiter ++ "#{window_active}" ++ format_delimiter ++ "#{window_flags}" ++ format_delimiter ++ "#{window_layout}" ++ "'";
+        return "'" ++ "#{session_name}" ++ format_delimiter ++ "#{window_index}" ++ format_delimiter ++ "#{window_name}" ++ format_delimiter ++ "#{window_active}" ++ format_delimiter ++ "#{window_flags}" ++ format_delimiter ++ "#{window_layout}" ++ "'";
     }
 };
 
@@ -393,7 +384,7 @@ pub const Resurrect = struct {
     //  Functionality is (somewhat) replicated from here: https://github.com/tmux-plugins/tmux-resurrect/blob/cff343cf9e81983d3da0c8562b01616f12e8d548/scripts/save.sh
     fn dump(self: Self, file: std.fs.File) !void {
         // Dump all 3 formatters here into the respective structs, stringify the data, write to file
-        var file_data = ResurrectFileData{ .pane_data = &[_]paneData{}, .window_data = &[_]windowData{}, .state_data = stateData{} };
+        var file_data = ResurrectFileData{ .pane_data = &[_]paneData{}, .window_data = &[_]windowData{}, .state_data = &[_]stateData{} };
 
         // Set all file data
         try file_data.set(self.allocator);
