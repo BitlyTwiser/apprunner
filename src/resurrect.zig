@@ -26,7 +26,7 @@ const format_delimiter: []const u8 = "\\t"; // Used to seperate the lines in the
 const format_delimiter_u8 = '\t';
 
 // Invalid char set
-const invalid_char_set = [_][]const u8{ "-", " ", ",", "" };
+const invalid_char_set = [_][]const u8{ " ", ",", "" };
 
 const resurrectDumpType = union(enum) {
     window,
@@ -69,10 +69,11 @@ const ResurrectFileData = struct {
     }
 
     /// Performs JSON serialization and file storage from the resurrectFileData
-    fn convertJSON(self: *Self, allocator: std.mem.Allocator) ![]u8 {
-        print("after parse - {any}\n", .{self});
+    fn convertJSON(self: Self, allocator: std.mem.Allocator) ![]u8 {
+        // print("after parse - {any}\n", .{self});
+
         var w = std.ArrayList(u8).init(allocator);
-        try std.json.stringify(self, .{}, w.writer());
+        try std.json.stringify(self, .{ .emit_strings_as_arrays = true }, w.writer());
 
         return w.items;
     }
@@ -159,26 +160,27 @@ const ResurrectFileData = struct {
                 if (std.mem.eql(u8, line, i_char)) invalid_char = true;
             }
 
-            if (!invalid_char) {
-                data_set.* = true;
-                // Always dupe else the next pointer causes issues when iterating
-                const dupe_i_line = try allocator.dupe(u8, line);
+            data_set.* = true;
+            // Always dupe else the next pointer causes issues when iterating
+            var dupe_i_line = try allocator.dupe(u8, line);
 
-                // Now find the type of i_line_t and switch on that. Then parse for int, bool, or const etc..
-                switch (@typeInfo(field.type)) {
-                    .Int => {
-                        @field(&interface, field.name) = try std.fmt.parseInt(field.type, dupe_i_line, 10);
-                    },
-                    .Bool => {
-                        @field(&interface, field.name) = try self.parseBool(dupe_i_line);
-                    },
-                    .Pointer => {
-                        @field(&interface, field.name) = dupe_i_line;
-                    },
-                    else => {
-                        unreachable; // We do not support anything else here! This is a rather static set of fields
-                    },
-                }
+            // Now find the type of i_line_t and switch on that. Then parse for int, bool, or const etc..
+            switch (@typeInfo(field.type)) {
+                .Int => {
+                    if (invalid_char) dupe_i_line = @constCast("0");
+                    @field(&interface, field.name) = try std.fmt.parseInt(field.type, dupe_i_line, 10);
+                },
+                .Bool => {
+                    if (invalid_char) dupe_i_line = @constCast("false");
+                    @field(&interface, field.name) = try self.parseBool(dupe_i_line);
+                },
+                .Pointer => {
+                    if (invalid_char) dupe_i_line = @constCast("");
+                    @field(&interface, field.name) = dupe_i_line;
+                },
+                else => {
+                    unreachable; // We do not support anything else here! This is a rather static set of fields
+                },
             }
         }
 
@@ -267,6 +269,21 @@ const windowData = struct {
     fn formatTmuxData(self: Self) []const u8 {
         _ = self;
         return "'" ++ "#{session_name}" ++ format_delimiter ++ "#{window_index}" ++ format_delimiter ++ "#{window_name}" ++ format_delimiter ++ "#{window_active}" ++ format_delimiter ++ "#{window_flags}" ++ format_delimiter ++ "#{window_layout}" ++ "'";
+    }
+
+    // Window layout is stored in a comma seperated string
+    fn parseWindowLayout(self: Self, allocator: std.mem.Allocator) ![][]const u8 {
+        var parsed_values = std.ArrayList([]const u8).init(allocator);
+        var iter = std.mem.split(u8, self.window_layout, ",");
+
+        while (iter.next()) |item| {
+            item = std.mem.trim(u8, item, " ");
+
+            const d_item = try allocator.dupe(u8, item);
+            try parsed_values.append(d_item);
+        }
+
+        return parsed_values.items;
     }
 };
 
@@ -386,8 +403,6 @@ pub const Resurrect = struct {
         // Capture JSON data and pass to file
         const json_parsed_data = try file_data.convertJSON(self.allocator);
 
-        print("After parsing json: {any}", .{json_parsed_data});
-
         //  Dump JSON data to given file.
         try file.writer().writeAll(json_parsed_data);
     }
@@ -506,10 +521,10 @@ test test_sig {
 }
 
 test "Store some json data" {
-    const file_data = ResurrectFileData{ .pane_data = &[_]paneData{}, .window_data = &[_]windowData{}, .state_data = stateData{} };
+    const file_data = ResurrectFileData{ .pane_data = &[_]paneData{}, .window_data = &[_]windowData{}, .state_data = &[_]stateData{} };
     var w = std.ArrayList(u8).init(std.heap.page_allocator);
     try std.json.stringify(file_data, .{}, w.writer());
 
     // Test empty struct serializes as we expect
-    assert(std.mem.eql(u8, "{\"pane_data\":[],\"window_data\":[],\"state_data\":{\"session_name\":\"\",\"client_session\":\"\",\"client_last_sessions\":\"\"}}", w.items));
+    assert(std.mem.eql(u8, "{\"pane_data\":[],\"window_data\":[],\"state_data\":[]}", w.items));
 }
