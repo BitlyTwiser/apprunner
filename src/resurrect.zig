@@ -315,11 +315,25 @@ pub const Resurrect = struct {
     /// Restores the given session data when called
     pub fn restoreSession(self: Self) !void {
         // Read from the given config file location and de-serialize the json data from slice
-        const json_parsed = try std.json.parseFromSlice(ResurrectFileData, self.allocator, "", .{});
+        const config_file_path = try self.configFilePath();
+
+        const file = try std.fs.openFileAbsolute(config_file_path, .{ .mode = .read_only });
+
+        // Alloc print here. Might be a heapless way of doing this file io, but realloc is always fun
+        const buf = try file.reader().readAllAlloc(self.allocator, 1024 * 2 * 2);
+        const json_parsed = try std.json.parseFromSlice(ResurrectFileData, self.allocator, buf, .{});
         defer json_parsed.deinit();
 
-        // DO something with the value when we go to restore. This is the long process
-        print("{any}", .{json_parsed.value});
+        const res_data = json_parsed.value;
+
+        try self.restore(res_data);
+    }
+
+    fn restore(self: Self, data: ResurrectFileData) !void {
+        _ = self;
+        // _ = data;
+
+        print("{s}", .{data.pane_data[0].window_name});
     }
 
     /// Wrapper around save to run this in a thread. Runs indefinitely until os.Exit()
@@ -328,16 +342,10 @@ pub const Resurrect = struct {
         t.detach();
     }
 
-    /// Ascertains the parsed json data in the form of the ResurrectFileData struct to restore the processes and sessions within
-    pub fn restore(self: Self, restore_data: ResurrectFileData) !void {
-        _ = self;
-        _ = restore_data;
-    }
-
     /// ran in a thread on start of the application which stores session data every N Seconds/Minutes
     /// This is a rolling backup - no copies are stored
     pub fn save(self: Self) !void {
-        // Write err to logfile
+        // Write err to logfile - unsure if this even works lol
         errdefer |err| {
             var file: ?std.fs.File = undefined;
             file = std.fs.createFileAbsolute("/var/tmp/apprunner_error.log", .{}) catch null;
@@ -350,6 +358,21 @@ pub const Resurrect = struct {
             }
         }
 
+        const config_file_path = try self.configFilePath();
+
+        var file = try std.fs.createFileAbsolute(config_file_path, .{});
+        defer file.close();
+
+        // Dump performs all IO/parsing of Tmux commands to aggregate the necessary data points to store the configuration file
+        try self.dump(file);
+
+        // Wait N minutes before running again
+        std.time.sleep(resurrect_wait_time);
+        // Recurse and retry/perform save
+        try self.save();
+    }
+
+    fn configFilePath(self: Self) ![]u8 {
         // Created during the processes below in order to ascertain the actual path where the resurrect file will be installed
         var definitive_dir_path: ?[]const u8 = null;
         const env = try std.process.getEnvMap(self.allocator);
@@ -370,25 +393,15 @@ pub const Resurrect = struct {
                     // Do nothing, this is good.
                 },
                 else => { // For any other error type, we want to return here.
-                    return;
+                    return e;
                 },
             }
-            return;
         };
 
         var buf: [2048]u8 = undefined;
         const file_path = try std.fmt.bufPrint(&buf, "{s}/{s}", .{ definitive_dir_path.?, resurrect_file_name });
 
-        var file = try std.fs.createFileAbsolute(file_path, .{});
-        defer file.close();
-
-        // Dump performs all IO/parsing of Tmux commands to aggregate the necessary data points to store the configuration file
-        try self.dump(file);
-
-        // Wait N minutes before running again
-        std.time.sleep(resurrect_wait_time);
-        // Recurse and retry/perform save
-        try self.save();
+        return file_path;
     }
 
     // Helper functions for capturing sessions/state data from Tmux
@@ -518,6 +531,13 @@ test test_sig {
 
     // Should end up with save file
     try res.save();
+}
+
+fn test_sig_restore() !void {}
+
+test test_sig_restore {
+    var res = try Resurrect.init(std.heap.page_allocator);
+    try res.restoreSession();
 }
 
 test "Store some json data" {
