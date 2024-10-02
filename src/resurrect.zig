@@ -2,6 +2,7 @@ const std = @import("std");
 const r_i = @import("runner.zig");
 const runner = r_i.Runner;
 const config = @import("config.zig");
+const utils = @import("utils.zig");
 
 const assert = std.debug.assert;
 const print = std.debug.print;
@@ -212,7 +213,7 @@ const ResurrectFileData = struct {
 
         a[a.len - 1] = data.formatTmuxData();
 
-        const tmux_data = try runCommand(a, std.heap.page_allocator);
+        const tmux_data = try utils.runCommand(a, allocator);
 
         return std.mem.split(u8, tmux_data, "\n");
     }
@@ -287,6 +288,10 @@ const windowData = struct {
 
         return parsed_values.items;
     }
+
+    fn splitHorizontal() ![]const u8 {}
+
+    fn splitVertical() ![]const u8 {}
 };
 
 const stateData = struct {
@@ -306,12 +311,11 @@ const stateData = struct {
 /// Resurrect is in charge of snapshotting current user state and restoring state on load.
 pub const Resurrect = struct {
     allocator: std.mem.Allocator,
+    pane_map: std.StringHashMap(std.ArrayList(paneData)),
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) !Self {
-        return Self{
-            .allocator = allocator,
-        };
+        return Self{ .allocator = allocator, .pane_map = std.StringHashMap(std.ArrayList(paneData)).init(allocator) };
     }
 
     /// Restores the given session data when called
@@ -341,13 +345,58 @@ pub const Resurrect = struct {
         try self.restore(res_data);
     }
 
-    fn restore(self: Self, data: ResurrectFileData) !void {
-        _ = self;
+    // Notes on splitting the panes:
+    // 1: for the given string: d5e0,182x44,0,0[182x25,0,0,1,182x18,0,26{94x18,0,26,3,87x18,95,26,4}]
+    // d5e0 can be ignored as this is an internal tmux value
+    // 182x44,0,0[182x25,0,0,1,182x18,0,26{94x18,0,26,3,87x18,95,26,4}]
+    // 182x44 is the height and width of the window panes.
+    // 182x25 is within [] which means its a split, however, the X value does not change so its a Horizontal split
+    // In the {} we hve another split on the pane and this is 94x18 and 87x18 so its a VERTICAL split  since the Y changed.
+    // Use this to determine if we need to horizontal split or vertical
+    // tmux split-window -v -p 57
+    // tmux split-window -h -p 52
+    // The ints are % of the space taken. So calculate this using the vectors we have above.
+    // If string contains [] we have 1 split and its horizontal, else {} is vertical
 
-        for (data.window_data) |win| {
-            print("{s}\n", .{win.window_layout});
+    fn restore(self: Self, data: ResurrectFileData) !void {
+        // Make a stringMap of the pane data so we can easily find N panes for a window name
+        var pane_map = self.pane_map;
+
+        // Lazily build out map for matching panes to windows below whilst restoring
+        for (data.pane_data) |pane| {
+            if (pane_map.contains(pane.window_name)) {
+                if (pane_map.get(pane.window_name)) |pane_m| {
+                    var p = pane_m;
+                    try p.append(pane);
+                }
+            } else {
+                var pane_array_list = std.ArrayList(paneData).init(self.allocator);
+                try pane_array_list.append(pane);
+                try pane_map.put(pane.window_name, pane_array_list);
+            }
         }
+        // Spawns sessions
+        try self.initialSessionCreate();
+        for (data.pane_data) |win| {
+            print("{s}\n", .{win.pane_current_command});
+            print("{s}\n", .{win.pane_current_path});
+        }
+
+        // Iterate over all windows, if there are panes within the window, create/split the panes
+        for (data.window_data) |window| {
+            try self.restoreWindow(window);
+        }
+
+        // Match things on window name, each pane has a matching window name, so we know where to split etc..
+        // Mke window, then take N panes for window and split window. Then match each pane index to each newly created pane
+        // The splitting makes the panes, there is no pane creation otherwise.
+        // So start with windows, if the window has multiple panes, make the panes. Then run command per pane
+
         // const r = try runner.init(self.allocator);
+
+        // Start session:
+        // Create windows/panes
+        // Each pane run command
 
         // Convert everything to apps for the initial pass, this will spawn sessions and windows
         // try r.spawner(self.appsFromData(data.pane_data));
@@ -367,28 +416,33 @@ pub const Resurrect = struct {
     // tmux select-pane -t "$pane_index"
     // 	tmux send-keys -t "${session_name}:${window_number}.${pane_index}" "$command" enter
 
+    fn restoreWindow(self: Self, window_data: windowData) !void {
+        // parse the window layout, split all the windows as needed
+        // If window has multiple panes (matched by name), split all the panes out for each window.
+        const pane_data = self.pane_map.get(window_data.window_name);
+        if (pane_data) |pd| {
+            for (pd.items) |pi| {}
+        }
+    }
+
     fn restorePanes(self: Self, pane_data: []paneData) !void {
         _ = pane_data;
         _ = self;
     }
 
-    // fn appsFromData(self: Self, pane_data: []paneData) ![]config.App {
-    //     var apps = try self.allocator.alloc(config.App, window_data.len);
-    //     _ = window_data;
-    //     _ = self;
-
-    //     for (pane_data) |pane| {
-    //         config.App{
-    //             // .command = .
-    //         };
-    //     }
-
-    //     return apps;
-    // }
-
-    // Spawns the initial session that all windows and panes are placed into
-    fn initialSessionCreate(self: Self) !void {
+    fn paneCommandRunner(self: Self, pane_data: paneData) !void {
         _ = self;
+        _ = pane_data;
+    }
+
+    // Spawns the initial session that all windows and panes are placed into using default app name
+    fn initialSessionCreate(self: Self) !void {
+        try utils.runCommandEmpty(&[_][]const u8{
+            "tmux",
+            "new-session",
+            "-s",
+            r_i.app_name,
+        }, self.allocator);
     }
 
     /// Wrapper around save to run this in a thread. Runs indefinitely until os.Exit()
@@ -491,7 +545,7 @@ pub const Resurrect = struct {
 
     // Run tmux -V to get  version and collect output
     fn getTmuxVersion(self: Self) ![]u8 {
-        return runCommand(&[_][]const u8{ "tmux", "-V" }, self.allocator);
+        return utils.runCommand(&[_][]const u8{ "tmux", "-V" }, self.allocator);
     }
 
     // CLeans incoming tmux version string from tmux 3.2a => 32 etc..
@@ -532,23 +586,6 @@ pub const Resurrect = struct {
         return try std.fmt.allocPrint(self.allocator, "{s}{s}{s}", .{ color_red, a, color_reset });
     }
 };
-
-// run arbitrary cli commands and collect stderr & stdout
-fn runCommand(command_data: []const []const u8, allocator: std.mem.Allocator) ![]u8 {
-    var child = std.process.Child.init(command_data, allocator);
-    child.stdin_behavior = .Pipe;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    try child.spawn();
-
-    var stdout = std.ArrayList(u8).init(allocator);
-    var stderr = std.ArrayList(u8).init(allocator);
-
-    try child.collectOutput(&stdout, &stderr, 1024 * 2 * 2);
-    _ = try child.wait();
-
-    return stdout.items;
-}
 
 test "Get tmux version and clean" {
     var resurrect = try Resurrect.init(std.heap.page_allocator);

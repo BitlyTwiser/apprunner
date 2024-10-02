@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const config = @import("./config.zig");
 const zdotenv_parser = @import("zdotenv").Parser;
+const utils = @import("utils.zig");
 const print = std.debug.print;
 
 pub const app_name = "apprunner"; // This is public as we import the app_name (session name) into resurrect for controlling which sessions we capture.
@@ -91,18 +92,8 @@ pub const Runner = struct {
     }
 
     pub fn spawner(self: *Self, apps: []config.App) !void {
-        var thread_pool = try self.allocator.alloc(std.Thread, apps.len);
         for (apps, 0..) |app, i| {
-            thread_pool[i] = try std.Thread.spawn(.{ .allocator = self.allocator }, spawnProcess, .{ self, app.name, app.standalone, app.command, app.start_location, app.env_path, i });
-            // Its too fast lol - Try sleeping for a moment to avoid missing shells. If you go under 100000 if fails sooo this is the magic num
-            std.time.sleep(100000 * 1024);
-        }
-
-        // Wait for all threads to stop program from exiting
-        // We could also detach and run forever with a loop
-        // Ctrl+C event is handled from main
-        for (thread_pool) |thread| {
-            thread.join();
+            try self.spawnProcess(app.name, app.standalone, app.command, app.start_location, app.env_path, i);
         }
     }
 
@@ -118,9 +109,7 @@ pub const Runner = struct {
     ) !void {
         // Base command to start tmux session
         const exec_command = try tmuxConfig(self, name, standalone, command, location, env_path, index);
-        var child = std.process.Child.init(&[_][]const u8{ self.shell_command, self.shell_sub_command, exec_command }, self.allocator);
-        try child.spawn();
-        _ = try child.wait();
+        try utils.runCommandEmpty(&[_][]const u8{ self.shell_command, self.shell_sub_command, exec_command }, self.allocator);
     }
 
     // tmux specific configurations
