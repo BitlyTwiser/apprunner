@@ -94,7 +94,7 @@ pub const Runner = struct {
         var thread_pool = try self.allocator.alloc(std.Thread, apps.len);
         for (apps, 0..) |app, i| {
             thread_pool[i] = try std.Thread.spawn(.{ .allocator = self.allocator }, spawnProcess, .{ self, app.name, app.standalone, app.command, app.start_location, app.env_path, i });
-            // Its too fast lol - Try sleeping for a moment to avoid missing shells
+            // Its too fast lol - Try sleeping for a moment to avoid missing shells. If you go under 100000 if fails sooo this is the magic num
             std.time.sleep(100000 * 1024);
         }
 

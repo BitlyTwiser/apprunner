@@ -1,5 +1,7 @@
 const std = @import("std");
-const runner = @import("runner.zig");
+const r_i = @import("runner.zig");
+const runner = r_i.Runner;
+const config = @import("config.zig");
 
 const assert = std.debug.assert;
 const print = std.debug.print;
@@ -153,7 +155,7 @@ const ResurrectFileData = struct {
             const line = iter_c.next() orelse "";
 
             // We totally break out when the name does not match apprunner session
-            if (index == 0 and !std.mem.eql(u8, line, runner.app_name)) break :i_for;
+            if (index == 0 and !std.mem.eql(u8, line, r_i.app_name)) break :i_for;
 
             // Ensure no char is from the invalid set
             for (invalid_char_set) |i_char| {
@@ -317,7 +319,17 @@ pub const Resurrect = struct {
         // Read from the given config file location and de-serialize the json data from slice
         const config_file_path = try self.configFilePath();
 
-        const file = try std.fs.openFileAbsolute(config_file_path, .{ .mode = .read_only });
+        const file = std.fs.openFileAbsolute(config_file_path, .{ .mode = .read_only }) catch |e| {
+            switch (e) {
+                error.FileNotFound => {
+                    print("Tmux resurrect config file was not found at: {s}. Please run the application normally", .{config_file_path});
+                },
+                else => {
+                    return e;
+                },
+            }
+            return;
+        };
 
         // Alloc print here. Might be a heapless way of doing this file io, but realloc is always fun
         const buf = try file.reader().readAllAlloc(self.allocator, 1024 * 2 * 2);
@@ -331,9 +343,52 @@ pub const Resurrect = struct {
 
     fn restore(self: Self, data: ResurrectFileData) !void {
         _ = self;
-        // _ = data;
 
-        print("{s}", .{data.pane_data[0].window_name});
+        for (data.window_data) |win| {
+            print("{s}\n", .{win.window_layout});
+        }
+        // const r = try runner.init(self.allocator);
+
+        // Convert everything to apps for the initial pass, this will spawn sessions and windows
+        // try r.spawner(self.appsFromData(data.pane_data));
+
+        // After all the apps are spawned, set the pane data we stored and resize everything if needed
+        // We can ignore the initial windows (which is N number of indicies that we captured initially)
+        // self.restorePanes(pane_data: []paneData)
+
+        // Can we convert the data we have back into apps? Then pass that data to runner?
+        // Then resize all the windows etc.. etc.. with the pane information?
+        // Each window should technically be an app? Then we juyst take the pane information, match it to each window which we will alread have, then just resize
+
+    }
+
+    // For pane data we can do something like these commands
+    // tmux switch-client -t "${session_name}:${window_number}"
+    // tmux select-pane -t "$pane_index"
+    // 	tmux send-keys -t "${session_name}:${window_number}.${pane_index}" "$command" enter
+
+    fn restorePanes(self: Self, pane_data: []paneData) !void {
+        _ = pane_data;
+        _ = self;
+    }
+
+    // fn appsFromData(self: Self, pane_data: []paneData) ![]config.App {
+    //     var apps = try self.allocator.alloc(config.App, window_data.len);
+    //     _ = window_data;
+    //     _ = self;
+
+    //     for (pane_data) |pane| {
+    //         config.App{
+    //             // .command = .
+    //         };
+    //     }
+
+    //     return apps;
+    // }
+
+    // Spawns the initial session that all windows and panes are placed into
+    fn initialSessionCreate(self: Self) !void {
+        _ = self;
     }
 
     /// Wrapper around save to run this in a thread. Runs indefinitely until os.Exit()
