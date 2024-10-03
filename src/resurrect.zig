@@ -56,30 +56,14 @@ const resurrectDumpType = union(enum) {
     }
 };
 
+const paneSplitType = union(enum) {
+    horizontal,
+    vertical,
+};
+
 const paneSplitData = struct {
-    horizontal_splt: []horizontalSplit,
-    vertical_split: []verticalSplit,
-};
-
-const horizontalSplit = struct {
-    values: []const u8,
-
-    const Self = @This();
-
-    // This actually runs to command to split the pane
-    fn split(self: Self) !void {
-        _ = self;
-    }
-};
-const verticalSplit = struct {
-    values: []const u8,
-
-    const Self = @This();
-
-    // This actually runs to command to split the pane
-    fn split(self: Self) !void {
-        _ = self;
-    }
+    p_type: paneSplitType,
+    coord_set: []const u8, // The X->Y value (i.e. 88X90) value for this type
 };
 
 // Resurrect File structure - Used for serializing the struct data into and out of the stored resurrect file.
@@ -303,32 +287,17 @@ const windowData = struct {
     }
 
     // Window layout is stored in a comma seperated string
-    fn parseWindowLayout(self: Self, allocator: std.mem.Allocator) ![][]const u8 {
-        var parsed_values = std.ArrayList([]const u8).init(allocator);
-        // var iter = std.mem.split(u8, self.window_layout, ",");
-
-        // while (iter.next()) |item| {
-        //     const d_item = try allocator.dupe(u8, std.mem.trim(u8, item, " "));
-        //     try parsed_values.append(d_item);
-        // }
-
-        // Count number of splits vert and hor, calculate the  base percentage to splt on given the X/Y values
+    fn parseWindowLayout(self: Self, allocator: std.mem.Allocator) ![]paneSplitData {
+        var parsed_values = std.ArrayList(paneSplitData).init(allocator);
         // window_layout is passed in due to the recursive nature of these functions as horizontal will call vertical and vice-versa as needed to split out all the panes
-        _ = try self.splitHorizontal(self.window_layout, &parsed_values, allocator);
-        _ = try self.splitVertical(self.window_layout, &parsed_values, allocator);
-
-        print("items?\n", .{});
-        for (parsed_values.items) |item| {
-            print("{s}\n", .{item});
-        }
+        try self.splitHorizontal(self.window_layout, &parsed_values, allocator);
+        try self.splitVertical(self.window_layout, &parsed_values, allocator);
 
         return parsed_values.items;
     }
 
-    // Horizontal needs to call vertical and vice versa to ensure that we can split the inner windows as we need
-
     // If the layout contains a "[" its horizontal. Find all horizonal windows and split them
-    fn splitHorizontal(self: Self, data: []const u8, parsed_values: *std.ArrayList([]const u8), allocator: std.mem.Allocator) splitErr!void {
+    fn splitHorizontal(self: Self, data: []const u8, parsed_values: *std.ArrayList(paneSplitData), allocator: std.mem.Allocator) splitErr!void {
         print("Horizontal layout: {s}\n", .{data});
         if (self.isHorizontal(data)) {
             const first_index = std.mem.indexOf(u8, data, "[") orelse 0;
@@ -345,14 +314,15 @@ const windowData = struct {
             while (iter.next()) |val| {
                 if (std.mem.containsAtLeast(u8, val, 1, "x")) {
                     print("appending: {s}\n", .{val});
-                    try @constCast(parsed_values).append(try allocator.dupe(u8, val));
+                    const p_data = paneSplitData{ .p_type = .horizontal, .coord_set = try allocator.dupe(u8, val) };
+                    try @constCast(parsed_values).append(p_data);
                 }
             }
         }
     }
 
     // if the layout contains a "{" its vertical. Find all  vertical windows and split them
-    fn splitVertical(self: Self, data: []const u8, parsed_values: *std.ArrayList([]const u8), allocator: std.mem.Allocator) splitErr!void {
+    fn splitVertical(self: Self, data: []const u8, parsed_values: *std.ArrayList(paneSplitData), allocator: std.mem.Allocator) splitErr!void {
         print("Vertical layout: {s}\n", .{self.window_layout});
         if (self.isVertical(data)) {
             const first_index = std.mem.indexOf(u8, data, "{") orelse 0;
@@ -369,7 +339,8 @@ const windowData = struct {
             while (iter.next()) |val| {
                 if (std.mem.containsAtLeast(u8, val, 1, "x")) {
                     print("appending: {s}\n", .{val});
-                    try @constCast(parsed_values).append(try allocator.dupe(u8, val));
+                    const p_data = paneSplitData{ .p_type = .vertical, .coord_set = try allocator.dupe(u8, val) };
+                    try @constCast(parsed_values).append(p_data);
                 }
             }
         }
@@ -485,18 +456,22 @@ pub const Resurrect = struct {
         // parse the window layout, split all the windows as needed
         const layout_parsed = try window_data.parseWindowLayout(self.allocator);
         try self.createWindow(window_data, layout_parsed);
-        // If window has multiple panes (matched by name), split all the panes out for each window.
-        // const pane_data = self.pane_map.get(window_data.window_name);
-        // if (pane_data) |pd| {
-        //     for (pd.items) |pi| {
-        //         try self.createPane(pi);
-        //     }
-        // }
     }
 
-    fn createWindow(self: Self, window_data: windowData, layout: [][]const u8) !void {
+    fn createWindow(self: Self, window_data: windowData, layout: []paneSplitData) !void {
         // print("{s}\n", .{layout});
-        _ = layout;
+
+        // For all parsed data values, split the windows
+        for (layout) |value| {
+            switch (value.p_type) {
+                .horizontal => {
+                    print("hor {any}\n", .{value});
+                },
+                .vertical => {
+                    print("vert {any}\n", .{value});
+                },
+            }
+        }
         _ = window_data;
         _ = self;
     }
