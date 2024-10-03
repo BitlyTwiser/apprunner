@@ -31,6 +31,8 @@ const format_delimiter_u8 = '\t';
 // Invalid char set
 const invalid_char_set = [_][]const u8{ " ", ",", "" };
 
+const splitErr = error{ SplitError, OutOfMemory };
+
 const resurrectDumpType = union(enum) {
     window,
     state,
@@ -51,6 +53,32 @@ const resurrectDumpType = union(enum) {
                 return &[_][]const u8{ "list-panes", "-a", "-F" };
             },
         }
+    }
+};
+
+const paneSplitData = struct {
+    horizontal_splt: []horizontalSplit,
+    vertical_split: []verticalSplit,
+};
+
+const horizontalSplit = struct {
+    values: []const u8,
+
+    const Self = @This();
+
+    // This actually runs to command to split the pane
+    fn split(self: Self) !void {
+        _ = self;
+    }
+};
+const verticalSplit = struct {
+    values: []const u8,
+
+    const Self = @This();
+
+    // This actually runs to command to split the pane
+    fn split(self: Self) !void {
+        _ = self;
     }
 };
 
@@ -277,19 +305,85 @@ const windowData = struct {
     // Window layout is stored in a comma seperated string
     fn parseWindowLayout(self: Self, allocator: std.mem.Allocator) ![][]const u8 {
         var parsed_values = std.ArrayList([]const u8).init(allocator);
-        var iter = std.mem.split(u8, self.window_layout, ",");
+        // var iter = std.mem.split(u8, self.window_layout, ",");
 
-        while (iter.next()) |item| {
-            const d_item = try allocator.dupe(u8, std.mem.trim(u8, item, " "));
-            try parsed_values.append(d_item);
+        // while (iter.next()) |item| {
+        //     const d_item = try allocator.dupe(u8, std.mem.trim(u8, item, " "));
+        //     try parsed_values.append(d_item);
+        // }
+
+        // Count number of splits vert and hor, calculate the  base percentage to splt on given the X/Y values
+        // window_layout is passed in due to the recursive nature of these functions as horizontal will call vertical and vice-versa as needed to split out all the panes
+        _ = try self.splitHorizontal(self.window_layout, &parsed_values, allocator);
+        _ = try self.splitVertical(self.window_layout, &parsed_values, allocator);
+
+        print("items?\n", .{});
+        for (parsed_values.items) |item| {
+            print("{s}\n", .{item});
         }
 
         return parsed_values.items;
     }
 
-    fn splitHorizontal() ![]const u8 {}
+    // Horizontal needs to call vertical and vice versa to ensure that we can split the inner windows as we need
 
-    fn splitVertical() ![]const u8 {}
+    // If the layout contains a "[" its horizontal. Find all horizonal windows and split them
+    fn splitHorizontal(self: Self, data: []const u8, parsed_values: *std.ArrayList([]const u8), allocator: std.mem.Allocator) splitErr!void {
+        print("Horizontal layout: {s}\n", .{data});
+        if (self.isHorizontal(data)) {
+            const first_index = std.mem.indexOf(u8, data, "[") orelse 0;
+            const last_index = std.mem.indexOf(u8, data, "]") orelse 0;
+
+            const slice = data[first_index + 1 .. last_index];
+            print("slice hor {s}\n", .{slice});
+            // We need to add the split slices recursively
+            if (self.isHorizontal(slice)) try self.splitHorizontal(slice, parsed_values, allocator);
+            if (self.isVertical(slice)) try self.splitVertical(slice, parsed_values, allocator);
+
+            print("parse?\n", .{});
+            var iter = std.mem.split(u8, slice, ",");
+            while (iter.next()) |val| {
+                if (std.mem.containsAtLeast(u8, val, 1, "x")) {
+                    print("appending: {s}\n", .{val});
+                    try @constCast(parsed_values).append(try allocator.dupe(u8, val));
+                }
+            }
+        }
+    }
+
+    // if the layout contains a "{" its vertical. Find all  vertical windows and split them
+    fn splitVertical(self: Self, data: []const u8, parsed_values: *std.ArrayList([]const u8), allocator: std.mem.Allocator) splitErr!void {
+        print("Vertical layout: {s}\n", .{self.window_layout});
+        if (self.isVertical(data)) {
+            const first_index = std.mem.indexOf(u8, data, "{") orelse 0;
+            const last_index = std.mem.indexOf(u8, data, "}") orelse 0;
+
+            const slice = data[first_index + 1 .. last_index];
+            print("slice vert {s}\n", .{slice});
+
+            if (self.isHorizontal(slice)) try self.splitHorizontal(slice, parsed_values, allocator);
+            if (self.isVertical(slice)) try self.splitVertical(slice, parsed_values, allocator);
+
+            print("parse vert?\n", .{});
+            var iter = std.mem.split(u8, slice, ",");
+            while (iter.next()) |val| {
+                if (std.mem.containsAtLeast(u8, val, 1, "x")) {
+                    print("appending: {s}\n", .{val});
+                    try @constCast(parsed_values).append(try allocator.dupe(u8, val));
+                }
+            }
+        }
+    }
+
+    fn isHorizontal(self: Self, data: []const u8) bool {
+        _ = self;
+        return (std.mem.containsAtLeast(u8, data, 1, "[") and std.mem.containsAtLeast(u8, data, 1, "]"));
+    }
+
+    fn isVertical(self: Self, data: []const u8) bool {
+        _ = self;
+        return (std.mem.containsAtLeast(u8, data, 1, "{") and std.mem.containsAtLeast(u8, data, 1, "}"));
+    }
 };
 
 const stateData = struct {
@@ -374,7 +468,7 @@ pub const Resurrect = struct {
             }
         }
         // Spawns sessions
-        try self.initialSessionCreate();
+        // try self.initialSessionCreate();
 
         // Iterate over all windows, if there are panes within the window, create/split the panes
         for (data.window_data) |window| {
@@ -401,7 +495,8 @@ pub const Resurrect = struct {
     }
 
     fn createWindow(self: Self, window_data: windowData, layout: [][]const u8) !void {
-        print("{s}", .{layout});
+        // print("{s}\n", .{layout});
+        _ = layout;
         _ = window_data;
         _ = self;
     }

@@ -74,7 +74,7 @@ pub fn main() !void {
 
             return;
         }
-        // Restore stored session after crash
+        // Restore stored session after crash, use a catch here and handle this error gradefully
         try res.restoreSession();
     } else {
         print("Invalid commands specified, please pass either config file path or restore flag as an argument to apprunner. Use apprunner -h for help\n", .{});
