@@ -208,12 +208,12 @@ pub const Runner = struct {
 };
 
 /// determines which base command to run depending on execution environment. I.e. linux/macOS
-fn commandBase(allocator: std.mem.Allocator) ![]const u8 {
+pub fn commandBase(allocator: std.mem.Allocator) ![]const u8 {
     return try captureShell(allocator);
 }
 
 // Process sub-command for running command when spawning shell
-fn subCommand() ![]const u8 {
+pub fn subCommand() ![]const u8 {
     // if (builtin.os.tag == .windows) return "-Command"; //No windows support
 
     return "-c";

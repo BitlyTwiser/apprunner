@@ -280,9 +280,7 @@ const windowData = struct {
         var iter = std.mem.split(u8, self.window_layout, ",");
 
         while (iter.next()) |item| {
-            item = std.mem.trim(u8, item, " ");
-
-            const d_item = try allocator.dupe(u8, item);
+            const d_item = try allocator.dupe(u8, std.mem.trim(u8, item, " "));
             try parsed_values.append(d_item);
         }
 
@@ -377,38 +375,11 @@ pub const Resurrect = struct {
         }
         // Spawns sessions
         try self.initialSessionCreate();
-        for (data.pane_data) |win| {
-            print("{s}\n", .{win.pane_current_command});
-            print("{s}\n", .{win.pane_current_path});
-        }
 
         // Iterate over all windows, if there are panes within the window, create/split the panes
         for (data.window_data) |window| {
             try self.restoreWindow(window);
         }
-
-        // Match things on window name, each pane has a matching window name, so we know where to split etc..
-        // Mke window, then take N panes for window and split window. Then match each pane index to each newly created pane
-        // The splitting makes the panes, there is no pane creation otherwise.
-        // So start with windows, if the window has multiple panes, make the panes. Then run command per pane
-
-        // const r = try runner.init(self.allocator);
-
-        // Start session:
-        // Create windows/panes
-        // Each pane run command
-
-        // Convert everything to apps for the initial pass, this will spawn sessions and windows
-        // try r.spawner(self.appsFromData(data.pane_data));
-
-        // After all the apps are spawned, set the pane data we stored and resize everything if needed
-        // We can ignore the initial windows (which is N number of indicies that we captured initially)
-        // self.restorePanes(pane_data: []paneData)
-
-        // Can we convert the data we have back into apps? Then pass that data to runner?
-        // Then resize all the windows etc.. etc.. with the pane information?
-        // Each window should technically be an app? Then we juyst take the pane information, match it to each window which we will alread have, then just resize
-
     }
 
     // For pane data we can do something like these commands
@@ -418,21 +389,30 @@ pub const Resurrect = struct {
 
     fn restoreWindow(self: Self, window_data: windowData) !void {
         // parse the window layout, split all the windows as needed
+        const layout_parsed = try window_data.parseWindowLayout(self.allocator);
+        try self.createWindow(window_data, layout_parsed);
         // If window has multiple panes (matched by name), split all the panes out for each window.
-        const pane_data = self.pane_map.get(window_data.window_name);
-        if (pane_data) |pd| {
-            for (pd.items) |pi| {}
-        }
+        // const pane_data = self.pane_map.get(window_data.window_name);
+        // if (pane_data) |pd| {
+        //     for (pd.items) |pi| {
+        //         try self.createPane(pi);
+        //     }
+        // }
     }
 
-    fn restorePanes(self: Self, pane_data: []paneData) !void {
-        _ = pane_data;
+    fn createWindow(self: Self, window_data: windowData, layout: [][]const u8) !void {
+        print("{s}", .{layout});
+        _ = window_data;
         _ = self;
     }
 
-    fn paneCommandRunner(self: Self, pane_data: paneData) !void {
-        _ = self;
-        _ = pane_data;
+    //  Build the pane from the pane_data passed in
+    fn createPane(self: Self, pane_data: paneData) !void {
+        // Run this command to switch to the pane and run the command
+        const command = try std.fmt.allocPrint(self.allocator, "tmux switch-client -t {s}:{d} \\; tmux select-pane -t {d} \\; tmux send-keys -t {s}:{d}.{d} '{s}' enter", .{ pane_data.session_name, pane_data.window_index, pane_data.pane_index, pane_data.session_name, pane_data.window_index, pane_data.pane_index, pane_data.pane_current_command });
+        const base_command = try r_i.commandBase(self.allocator);
+        const sub_command = try r_i.subCommand();
+        try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, command }, self.allocator);
     }
 
     // Spawns the initial session that all windows and panes are placed into using default app name
