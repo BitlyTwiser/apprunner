@@ -536,21 +536,15 @@ pub const Resurrect = struct {
         }
     }
 
-    // tmux split-window -v -p 57
-    // tmux split-window -h -p 52
-    // The ints are % of the space taken. So calculate this using the vectors we have above.
-    // If string contains [] we have 1 split and its horizontal, else {} is vertical
-
     // LOOOOL - Tmux code is backwards. -v is horizontal -h is vertical. I have no idea why. So [] is horizontal, but you must run the -v command to split  horizontally
     fn createWindow(self: Self, window_data: windowData, layout: paneSplitData, index: usize) !void {
         const base_command = try r_i.commandBase(self.allocator);
         const sub_command = try r_i.subCommand();
-        // print("{s}\n", .{layout});
-        if (layout.isEmpty()) {
-            // Make window with name. Apply splits below as needed. Need index?
-            const command = try std.fmt.allocPrint(self.allocator, "tmux new-window -s {s} \\; rename-window -t {s}:{d} {s}", .{ r_i.app_name, r_i.app_name, index, window_data.window_name });
-            try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, command }, self.allocator);
+        const command = try std.fmt.allocPrint(self.allocator, "tmux new-window -s {s} \\; rename-window -t {s}:{d} {s}", .{ r_i.app_name, r_i.app_name, index, window_data.window_name });
+        try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, command }, self.allocator);
 
+        // if there is nothing else, i.e. no panes in the window, just exit since there is nothing to split on anyway
+        if (layout.isEmpty()) {
             return;
         }
 
@@ -558,13 +552,13 @@ pub const Resurrect = struct {
         // For all parsed data values, split the windows
         for (layout.horizontal) |h_data| {
             _ = h_data;
-            // tmux split-window -v -p 57
+            // tmux split-window -t window_name -v -p 57
         }
 
         for (layout.vertical) |l_data| {
             _ = l_data;
             // Run the command for creating window panes
-            // tmux split-window -h -p 52
+            // tmux split-window -t window_name -h -p 52
         }
     }
 
