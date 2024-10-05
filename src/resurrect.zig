@@ -31,6 +31,12 @@ const format_delimiter_u8 = '\t';
 // Invalid char set
 const invalid_char_set = [_][]const u8{ " ", ",", "" };
 
+// Chars for pane splitting:
+const horizontal_start = "[";
+const horizontal_end = "]";
+const vertical_start = "{";
+const vertical_end = "}";
+
 const splitErr = error{ SplitError, OutOfMemory };
 
 const resurrectDumpType = union(enum) {
@@ -61,6 +67,36 @@ const paneSplitType = union(enum) {
     vertical,
     empty, // Empty case where we only ahve initial window. In which case we can exit early when spawning windows
     none, // The case where we just have a base window, no splits
+
+    const Self = @This();
+
+    fn startToken(self: Self) ?[]const u8 {
+        switch (self) {
+            .horizontal => {
+                return horizontal_start;
+            },
+            .vertical => {
+                return vertical_start;
+            },
+            else => {
+                return null;
+            },
+        }
+    }
+
+    fn endToken(self: Self) ?[]const u8 {
+        switch (self) {
+            .horizontal => {
+                return horizontal_end;
+            },
+            .vertical => {
+                return vertical_end;
+            },
+            else => {
+                return null;
+            },
+        }
+    }
 };
 
 // When we split, the entire set of values, within the brackets is how many TOTAL windows we have at the given percentage based on initial pane
@@ -81,7 +117,7 @@ const paneSplitData = struct {
 
     const Self = @This();
 
-    fn addLeaf(self: Self, p_type: paneSplitType, data: paneSplitDataMeta) !void {
+    fn addLeaf(self: *Self, p_type: paneSplitType, data: paneSplitDataMeta) !void {
         switch (p_type) {
             .horizontal => {
                 try self.horizontal.append(data);
@@ -89,7 +125,9 @@ const paneSplitData = struct {
             .vertical => {
                 try self.vertical.append(data);
             },
-            else => {},
+            else => {
+                return;
+            },
         }
     }
 
@@ -243,7 +281,7 @@ const ResurrectFileData = struct {
 
         var data: T = undefined;
 
-        // Below is a little unique - build out the []const []const u8 for the runCommand else commands fail to parse for some reason (with multiple flags?)
+        // Below is a little unique/messy - build out the []const []const u8 for the runCommand else commands fail to parse. Look at replacing this with the command creation like we do for the other commands (i.e. get shell etc..)
         const formatted_data = resDumpType.format();
         const a = try allocator.alloc([]const u8, formatted_data.len + 2);
 
@@ -328,10 +366,9 @@ const windowData = struct {
         var tokens = std.mem.tokenize(u8, self.window_layout, ",");
         // Skip the first (tmux uuid value) and grab the initial pane data.
         _ = tokens.next();
-        // Peek at the existing token, we stop iterating here then
         const initial_pane = tokens.next();
 
-        // If there is nothing after the intiial_pane (i.e. no vertical or horizontal value) we just stop since there is nothing to do other than make the window.
+        // If there is nothing after the initial (i.e. no vertical or horizontal value) we just stop since there is nothing to do other than make the window.
         print("layout: {s}\n", .{self.window_layout});
         print("{s}\n", .{initial_pane.?});
         print("{d}\n", .{tokens.index}); // Parse the entire buffer after the extract index
@@ -348,6 +385,18 @@ const windowData = struct {
 
         // Iterate through the buffer. Whne we find a [] or {} we know the "starting" bucket. Recursively strip the bucket to get all values we want.
         // WHen we find another bucket, recurse and store all elements in THAT bucket
+
+        // Get first index of the offending character i.e. [ and then the last. Everthing in that sector is horiztonal until we hit another offending and differentiation bracket. I.e. {}
+        // Split on every X. For each value we find that matches this, insert the leaf
+        const h_start = std.mem.indexOf(u8, buffer, horizontal_start) orelse 0;
+        const v_start = std.mem.indexOf(u8, buffer, vertical_start) orelse 0;
+
+        // Determine where we start parsing the buffer value from. i.e. horizontal or vertical bucket split. If its neither, we would never reach this case based on the above check for vert/horizontal
+        if (h_start < v_start) {
+            try self.parseRecurse(buffer, .horizontal, &pane_data, allocator);
+        } else {
+            try self.parseRecurse(buffer, .vertical, &pane_data, allocator);
+        }
 
         // parse first value out of the string. This is total window width and is used for determining split percentage
         // Each segment of {} || [] is a contiguous layout block. This should count as 1 allocation for a specific split type.
@@ -368,69 +417,69 @@ const windowData = struct {
         return pane_data;
     }
 
-    fn parseRecurse(self: Self, data: []const u8) !void {
-        _ = self;
-        _ = data;
-    }
+    // Parses out the []const []const u8 values from a given chain of values. Performs a modified sliding window
+    fn parseRecurse(self: Self, data: []const u8, p_type: paneSplitType, p_split_data: *paneSplitData, allocator: std.mem.Allocator) !void {
+        var p_data = p_split_data; // Store this off since it will break on the *const cast otherwiese
+        var first_index: usize = 0;
+        var last_index: usize = 0;
 
-    // If the layout contains a pair of "[]" its horizontal. Find all horizonal windows and split them
-    fn splitHorizontal(self: Self, data: []const u8, parsed_values: *std.ArrayList(paneSplitData), allocator: std.mem.Allocator) splitErr!void {
-        print("Horizontal layout: {s}\n", .{data});
-        if (self.isHorizontal(data)) {
-            const first_index = std.mem.indexOf(u8, data, "[") orelse 0;
-            const last_index = std.mem.indexOf(u8, data, "]") orelse 0;
+        switch (p_type) {
+            .horizontal => {
+                first_index = std.mem.indexOf(u8, data, horizontal_start) orelse 0;
+                last_index = std.mem.indexOf(u8, data, horizontal_end) orelse 0;
+            },
+            .vertical => {
+                first_index = std.mem.indexOf(u8, data, horizontal_start) orelse 0;
+                last_index = std.mem.indexOf(u8, data, horizontal_end) orelse 0;
+            },
+            else => {
+                return;
+            },
+        }
 
-            const slice = data[first_index + 1 .. last_index];
-            print("slice hor {s}\n", .{slice});
-            // We need to add the split slices recursively
-            if (self.isHorizontal(slice)) return try self.splitHorizontal(slice, parsed_values, allocator);
-            if (self.isVertical(slice)) return try self.splitVertical(slice, parsed_values, allocator);
+        // Slide over the asertained slice, build the iter on , and attempt to insert as many values as we can until we hit an offending delimiter value.
+        // THis is *either* horizontal_start or vertical_start. Then we continue to iterate after recursing
+        const slice = data[first_index + 1 .. last_index];
+        var iter = std.mem.tokenize(u8, slice, ",");
+        var stop_iter_index: usize = 0;
+        var tmp_p_type: paneSplitType = .none;
 
-            print("parse?\n", .{});
-            var iter = std.mem.split(u8, slice, ",");
-            while (iter.next()) |val| {
-                if (std.mem.containsAtLeast(u8, val, 1, "x")) {
-                    print("appending: {s}\n", .{val});
-                    const p_data = paneSplitData{ .p_type = .horizontal, .coord_set = try allocator.dupe(u8, val) };
-                    try @constCast(parsed_values).append(p_data);
-                }
+        const h_start = std.mem.indexOf(u8, slice, horizontal_start) orelse 0;
+        const v_start = std.mem.indexOf(u8, slice, vertical_start) orelse 0;
+
+        // Determine where we start parsing the buffer value from. i.e. horizontal or vertical bucket split. If its neither, we would never reach this case based on the above check for vert/horizontal
+        if (h_start < v_start) {
+            stop_iter_index = h_start;
+            tmp_p_type = .horizontal;
+        } else {
+            stop_iter_index = v_start;
+            tmp_p_type = .vertical;
+        }
+
+        // We can do the same check as above when we initially call this. Compare the two indicies? If they exist and one is greater, iterate until that index in the slice buffer
+        var index: usize = 0;
+        while (iter.next()) |val| : (index = 1) {
+            if (index == stop_iter_index) {
+                // Recurse with all the data that remains in the buffer until the given end token
+                const end_index = std.mem.indexOf(u8, slice, tmp_p_type.endToken() orelse "") orelse 0;
+                try self.parseRecurse(slice[stop_iter_index..end_index], tmp_p_type, p_data, allocator);
             }
-        } else if (self.isVertical(data)) {}
-    }
 
-    // if the layout contains a pair of "[]" its vertical. Find all  vertical windows and split them
-    fn splitVertical(self: Self, data: []const u8, parsed_values: *std.ArrayList(paneSplitData), allocator: std.mem.Allocator) splitErr!void {
-        print("Vertical layout: {s}\n", .{self.window_layout});
-        if (self.isVertical(data)) {
-            const first_index = std.mem.indexOf(u8, data, "{") orelse 0;
-            const last_index = std.mem.indexOf(u8, data, "}") orelse 0;
-
-            const slice = data[first_index + 1 .. last_index];
-            print("slice vert {s}\n", .{slice});
-
-            if (self.isHorizontal(slice)) try self.splitHorizontal(slice, parsed_values, allocator);
-            if (self.isVertical(slice)) try self.splitVertical(slice, parsed_values, allocator);
-
-            print("parse vert?\n", .{});
-            var iter = std.mem.split(u8, slice, ",");
-            while (iter.next()) |val| {
-                if (std.mem.containsAtLeast(u8, val, 1, "x")) {
-                    print("appending: {s}\n", .{val});
-                    const p_data = paneSplitData{ .p_type = .vertical, .coord_set = try allocator.dupe(u8, val) };
-                    try @constCast(parsed_values).append(p_data);
-                }
+            if (std.mem.containsAtLeast(u8, val, 1, "x")) {
+                try p_data.addLeaf(p_type, paneSplitDataMeta{ .p_type = p_type, .coord_set = try allocator.dupe(u8, val) });
             }
         }
     }
 
+    // Very high (and shitty) level checks of horizontal or vertical. Used only for the very base case
     fn isHorizontal(self: Self, data: []const u8) bool {
         _ = self;
-        return (std.mem.containsAtLeast(u8, data, 1, "[") and std.mem.containsAtLeast(u8, data, 1, "]"));
+        return (std.mem.containsAtLeast(u8, data, 1, horizontal_start) and std.mem.containsAtLeast(u8, data, 1, horizontal_end));
     }
 
     fn isVertical(self: Self, data: []const u8) bool {
         _ = self;
-        return (std.mem.containsAtLeast(u8, data, 1, "{") and std.mem.containsAtLeast(u8, data, 1, "}"));
+        return (std.mem.containsAtLeast(u8, data, 1, vertical_start) and std.mem.containsAtLeast(u8, data, 1, vertical_end));
     }
 };
 
@@ -485,15 +534,6 @@ pub const Resurrect = struct {
         try self.restore(res_data);
     }
 
-    // Notes on splitting the panes:
-    // 1: for the given string: d5e0,182x44,0,0[182x25,0,0,1,182x18,0,26{94x18,0,26,3,87x18,95,26,4}]
-    // d5e0 can be ignored as this is an internal tmux value
-    // 182x44,0,0[182x25,0,0,1,182x18,0,26{94x18,0,26,3,87x18,95,26,4}]
-    // 182x44 is the height and width of the window panes.
-    // 182x25 is within [] which means its a split, however, the X value does not change so its a Horizontal split
-    // In the {} we hve another split on the pane and this is 94x18 and 87x18 so its a VERTICAL split  since the Y changed.
-    // Use this to determine if we need to horizontal split or vertical
-
     fn restore(self: Self, data: ResurrectFileData) !void {
         // Make a stringMap of the pane data so we can easily find N panes for a window name
         var pane_map = self.pane_map;
@@ -511,36 +551,37 @@ pub const Resurrect = struct {
                 try pane_map.put(pane.window_name, pane_array_list);
             }
         }
-        // Spawns sessions
+        // Spawns session to build all the windows and panes within. If this errors we should probably handle it and return gracefully
         // try self.initialSessionCreate();
 
         // Iterate over all windows, if there are panes within the window, create/split the panes
         for (data.window_data, 0..) |window, index| {
             // parse the window layout, split all the windows as needed
             const layout_parsed = try window.parseWindowLayout(self.allocator);
-            try self.createWindow(window, layout_parsed, index);
+            print("index: {d} \ndata: {any}\n", .{ index, layout_parsed });
+            // try self.createWindow(window, layout_parsed, index);
         }
 
-        // For pane data we can do something like these commands
-        // tmux switch-client -t "${session_name}:${window_number}"
-        // tmux select-pane -t "$pane_index"
-        // 	tmux send-keys -t "${session_name}:${window_number}.${pane_index}" "$command" enter
-        // Iterate over the panes creating each pane as we go. This should map 1-1 with the windows created above.
-        var map_iter = pane_map.iterator();
-        while (map_iter.next()) |pm| {
-            const pane_data = pane_map.get(pm.key_ptr) orelse continue;
+        // // For pane data we can do something like these commands
+        // // tmux switch-client -t "${session_name}:${window_number}"
+        // // tmux select-pane -t "$pane_index"
+        // // 	tmux send-keys -t "${session_name}:${window_number}.${pane_index}" "$command" enter
+        // // Iterate over the panes creating each pane as we go. This should map 1-1 with the windows created above.
+        // var map_iter = pane_map.iterator();
+        // while (map_iter.next()) |pm| {
+        //     const pane_data = pane_map.get(pm.key_ptr.*) orelse continue;
 
-            for (pane_data.items) |p_item| {
-                try self.createPane(p_item);
-            }
-        }
+        //     for (pane_data.items) |p_item| {
+        //         try self.createPane(p_item);
+        //     }
+        // }
     }
 
     // LOOOOL - Tmux code is backwards. -v is horizontal -h is vertical. I have no idea why. So [] is horizontal, but you must run the -v command to split  horizontally
     fn createWindow(self: Self, window_data: windowData, layout: paneSplitData, index: usize) !void {
         const base_command = try r_i.commandBase(self.allocator);
         const sub_command = try r_i.subCommand();
-        const command = try std.fmt.allocPrint(self.allocator, "tmux new-window -s {s} \\; rename-window -t {s}:{d} {s}", .{ r_i.app_name, r_i.app_name, index, window_data.window_name });
+        const command = try std.fmt.allocPrint(self.allocator, "tmux new-window -t {s} \\; rename-window -t {s}:{d} {s}", .{ r_i.app_name, r_i.app_name, index, window_data.window_name });
         try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, command }, self.allocator);
 
         // if there is nothing else, i.e. no panes in the window, just exit since there is nothing to split on anyway
@@ -548,24 +589,47 @@ pub const Resurrect = struct {
             return;
         }
 
-        //These are reversed, so its -v for horizontal and -h for vertical -_- fkn Tmux
-        // For all parsed data values, split the windows
-        for (layout.horizontal) |h_data| {
-            _ = h_data;
-            // tmux split-window -t window_name -v -p 57
+        //Split all the windows. Note: These are reversed, so its -v for horizontal and -h for vertical -_- fkn Tmux
+        for (layout.horizontal.items) |h_data| {
+            const i_command = try std.fmt.allocPrint(self.allocator, "tmux split-window -t {s} -v -p {d}", .{ window_data.window_name, try self.calculateSplitPercentage(.horizontal, layout.initial, h_data.coord_set) });
+            try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, i_command }, self.allocator);
         }
 
-        for (layout.vertical) |l_data| {
-            _ = l_data;
-            // Run the command for creating window panes
-            // tmux split-window -t window_name -h -p 52
+        for (layout.vertical.items) |l_data| {
+            const i_command = try std.fmt.allocPrint(self.allocator, "tmux split-window -t {s} -h -p {d}", .{ window_data.window_name, try self.calculateSplitPercentage(.vertical, layout.initial, l_data.coord_set) });
+            try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, i_command }, self.allocator);
+        }
+    }
+
+    fn calculateSplitPercentage(self: Self, p_type: paneSplitType, base_val: []const u8, coord_set: []const u8) !usize {
+        _ = self;
+        var coords = std.mem.tokenize(u8, coord_set, "x");
+        var base = std.mem.tokenize(u8, base_val, "x");
+
+        const x = try std.fmt.parseInt(u8, coords.next() orelse "", 10);
+        const y = try std.fmt.parseInt(u8, coords.next() orelse "", 10);
+
+        const x_base = try std.fmt.parseInt(u8, base.next() orelse "", 10);
+        const y_base = try std.fmt.parseInt(u8, base.next() orelse "", 10);
+
+        // now divide based on type
+        switch (p_type) {
+            .horizontal => {
+                return x / x_base;
+            },
+            .vertical => {
+                return y / y_base;
+            },
+            else => {
+                return 0;
+            },
         }
     }
 
     //  Build the pane from the pane_data passed in
     fn createPane(self: Self, pane_data: paneData) !void {
         // Run this command to switch to the pane and run the command
-        const command = try std.fmt.allocPrint(self.allocator, "tmux switch-client -t {s}:{d} \\; tmux select-pane -t {d} \\; tmux send-keys -t {s}:{d}.{d} '{s}' enter", .{ pane_data.session_name, pane_data.window_index, pane_data.pane_index, pane_data.session_name, pane_data.window_index, pane_data.pane_index, pane_data.pane_current_command });
+        const command = try std.fmt.allocPrint(self.allocator, "tmux switch-client -t {s}:{d} \\; select-pane -t {d} \\; send-keys -t {s}:{d}.{d} '{s}' enter", .{ pane_data.session_name, pane_data.window_index, pane_data.pane_index, pane_data.session_name, pane_data.window_index, pane_data.pane_index, pane_data.pane_current_command });
         const base_command = try r_i.commandBase(self.allocator);
         const sub_command = try r_i.subCommand();
         try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, command }, self.allocator);
