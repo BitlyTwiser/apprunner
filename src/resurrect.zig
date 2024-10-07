@@ -99,36 +99,22 @@ const paneSplitType = union(enum) {
     }
 };
 
-// When we split, the entire set of values, within the brackets is how many TOTAL windows we have at the given percentage based on initial pane
-// 3 things: initial window pane, vertical slice, horizontal slice. Total count (i.e. len hor + len vert)
 const paneSplitDataMeta = struct {
     p_type: paneSplitType,
     coord_set: []const u8, // The X->Y value (i.e. 88X90) value for this type
 };
 
-// Make a tree - horizontal & vertical. Recursively parse until we fill the tree nodes to determine what we need to create
-// AS we iterate we need to store *where* we are in the tree. horizontal or vertical to "rollup" the result. since we know taht [80x11,0,0,2,80x5,0,12,26,80x5,0,18{40x5,0,18,28,39x5,41,18,29}]
-// is 2 horizontal splits and 2 vertical, but the two vertical splits are WIHTIN a horizontal split hence the {} after horizontal
 const paneSplitData = struct {
     initial: []const u8 = "", // Default value of none since we set this early in iterations of parsing layout
-    vertical: std.ArrayList(paneSplitDataMeta),
-    horizontal: std.ArrayList(paneSplitDataMeta),
+    panes: std.ArrayList(paneSplitDataMeta),
     p_type: paneSplitType = .none,
+    parent: paneSplitType = .none, // Track the parent so we can order things properly
 
     const Self = @This();
 
     fn addLeaf(self: *Self, p_type: paneSplitType, data: paneSplitDataMeta) !void {
-        switch (p_type) {
-            .horizontal => {
-                try self.horizontal.append(data);
-            },
-            .vertical => {
-                try self.vertical.append(data);
-            },
-            else => {
-                return;
-            },
-        }
+        _ = p_type;
+        try self.panes.append(data);
     }
 
     fn isEmpty(self: Self) bool {
@@ -155,8 +141,6 @@ const ResurrectFileData = struct {
 
     /// Performs JSON serialization and file storage from the resurrectFileData
     fn convertJSON(self: Self, allocator: std.mem.Allocator) ![]u8 {
-        // print("after parse - {any}\n", .{self});
-
         var w = std.ArrayList(u8).init(allocator);
         try std.json.stringify(self, .{ .emit_strings_as_arrays = true }, w.writer());
 
@@ -359,17 +343,13 @@ const windowData = struct {
     // Window layout is stored in a comma seperated string
     fn parseWindowLayout(self: Self, allocator: std.mem.Allocator) !paneSplitData {
         var pane_data = paneSplitData{
-            .horizontal = std.ArrayList(paneSplitDataMeta).init(allocator),
-            .vertical = std.ArrayList(paneSplitDataMeta).init(allocator),
+            .panes = std.ArrayList(paneSplitDataMeta).init(allocator),
         };
         // get first value to determine base pane sizes. The very first UUID that tmux passes is superfluous and used for internal tmux tracking. So we skip it.
         var tokens = std.mem.tokenize(u8, self.window_layout, ",");
         // Skip the first (tmux uuid value) and grab the initial pane data.
         _ = tokens.next();
         const initial_pane = tokens.next();
-
-        // If there is nothing after the initial (i.e. no vertical or horizontal value) we just stop since there is nothing to do other than make the window.
-        print("layout: {s}\n", .{self.window_layout});
 
         // take remaining buffer after the index from first value parsing and determine horizontal/vertical layout
         pane_data.initial = initial_pane.?;
@@ -381,9 +361,6 @@ const windowData = struct {
 
             return pane_data;
         }
-
-        // Iterate through the buffer. Whne we find a [] or {} we know the "starting" bucket. Recursively strip the bucket to get all values we want.
-        // WHen we find another bucket, recurse and store all elements in THAT bucket
 
         // Get first index of the offending character i.e. [ and then the last. Everthing in that sector is horiztonal until we hit another offending and differentiation bracket. I.e. {}
         // Split on every X. For each value we find that matches this, insert the leaf
@@ -547,18 +524,13 @@ pub const Resurrect = struct {
 
         // Iterate over all windows, if there are panes within the window, create/split the panes
         for (data.window_data, 0..) |window, index| {
-            _ = index;
             // parse the window layout, split all the windows as needed
             const layout_parsed = try window.parseWindowLayout(self.allocator);
-            for (layout_parsed.horizontal.items) |value| {
-                print("Horizontal value {s} {any}\n", .{ value.coord_set, value.p_type });
+            for (layout_parsed.panes.items) |value| {
+                print("type: {any} value: {s}\n", .{ value.p_type, value.coord_set });
             }
 
-            for (layout_parsed.vertical.items) |value| {
-                print("Vertical - value {s} {any}\n", .{ value.coord_set, value.p_type });
-            }
-
-            // try self.createWindow(window, layout_parsed, index);
+            try self.createWindow(window, layout_parsed, index);
         }
 
         // // For pane data we can do something like these commands
@@ -576,7 +548,7 @@ pub const Resurrect = struct {
         // }
     }
 
-    // LOOOOL - Tmux code is backwards. -v is horizontal -h is vertical. I have no idea why. So [] is horizontal, but you must run the -v command to split  horizontally
+    // Tmux code is backwards (o.0) -v is horizontal -h is vertical. I have no idea why. So [] is horizontal, but you must run the -v command to split  horizontally
     fn createWindow(self: Self, window_data: windowData, layout: paneSplitData, index: usize) !void {
         const base_command = try r_i.commandBase(self.allocator);
         const sub_command = try r_i.subCommand();
@@ -589,14 +561,21 @@ pub const Resurrect = struct {
         }
 
         //Split all the windows. Note: These are reversed, so its -v for horizontal and -h for vertical -_- fkn Tmux
-        for (layout.horizontal.items) |h_data| {
-            const i_command = try std.fmt.allocPrint(self.allocator, "tmux split-window -t {s} -v -p {d}", .{ window_data.window_name, try self.calculateSplitPercentage(.horizontal, layout.initial, h_data.coord_set) });
-            try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, i_command }, self.allocator);
-        }
-
-        for (layout.vertical.items) |l_data| {
-            const i_command = try std.fmt.allocPrint(self.allocator, "tmux split-window -t {s} -h -p {d}", .{ window_data.window_name, try self.calculateSplitPercentage(.vertical, layout.initial, l_data.coord_set) });
-            try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, i_command }, self.allocator);
+        for (layout.panes.items) |data| {
+            const coord_data = data.coord_set;
+            switch (data.p_type) {
+                .horizontal => {
+                    const i_command = try std.fmt.allocPrint(self.allocator, "tmux split-window -t {s} -v -p {d}", .{ window_data.window_name, try self.calculateSplitPercentage(.horizontal, layout.initial, coord_data) });
+                    try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, i_command }, self.allocator);
+                },
+                .vertical => {
+                    const i_command = try std.fmt.allocPrint(self.allocator, "tmux split-window -t {s} -h -p {d}", .{ window_data.window_name, try self.calculateSplitPercentage(.vertical, layout.initial, coord_data) });
+                    try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, i_command }, self.allocator);
+                },
+                else => {
+                    continue;
+                },
+            }
         }
     }
 
