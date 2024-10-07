@@ -370,11 +370,10 @@ const windowData = struct {
 
         // If there is nothing after the initial (i.e. no vertical or horizontal value) we just stop since there is nothing to do other than make the window.
         print("layout: {s}\n", .{self.window_layout});
-        print("{s}\n", .{initial_pane.?});
-        print("{d}\n", .{tokens.index}); // Parse the entire buffer after the extract index
+
         // take remaining buffer after the index from first value parsing and determine horizontal/vertical layout
+        pane_data.initial = initial_pane.?;
         const buffer = tokens.buffer[tokens.index..];
-        print("tokens buffer {s}\n", .{buffer});
 
         // Exit early if there is nothing left to do
         if (!self.isHorizontal(buffer) and !self.isVertical(buffer)) {
@@ -398,75 +397,67 @@ const windowData = struct {
             try self.parseRecurse(buffer, .vertical, &pane_data, allocator);
         }
 
-        // parse first value out of the string. This is total window width and is used for determining split percentage
-        // Each segment of {} || [] is a contiguous layout block. This should count as 1 allocation for a specific split type.
-        // Multiple splits can exist in either
-        // try self.splitVertical(self.window_layout, &parsed_values, allocator);
-
-        // for (parsed_values.items) |value| {
-        //     switch (value.p_type) {
-        //         .horizontal => {
-        //             print("hor {s}\n", .{value.coord_set});
-        //         },
-        //         .vertical => {
-        //             print("vert {s}\n", .{value.coord_set});
-        //         },
-        //     }
-        // }
-
         return pane_data;
     }
 
     // Parses out the []const []const u8 values from a given chain of values. Performs a modified sliding window
     fn parseRecurse(self: Self, data: []const u8, p_type: paneSplitType, p_split_data: *paneSplitData, allocator: std.mem.Allocator) !void {
-        var p_data = p_split_data; // Store this off since it will break on the *const cast otherwiese
         var first_index: usize = 0;
         var last_index: usize = 0;
+        var offending_index: ?usize = 0;
+        var offending_type: ?paneSplitType = null;
+        var stop_index: usize = 0;
+
+        // End recursion case as well
+        if (data.len == 0) return;
 
         switch (p_type) {
             .horizontal => {
                 first_index = std.mem.indexOf(u8, data, horizontal_start) orelse 0;
-                last_index = std.mem.indexOf(u8, data, horizontal_end) orelse 0;
+                last_index = std.mem.lastIndexOf(u8, data, horizontal_end) orelse 0;
+
+                offending_index = std.mem.indexOf(u8, data, vertical_start);
+                if (offending_index != null) {
+                    offending_type = .vertical;
+                }
             },
             .vertical => {
-                first_index = std.mem.indexOf(u8, data, horizontal_start) orelse 0;
-                last_index = std.mem.indexOf(u8, data, horizontal_end) orelse 0;
+                first_index = std.mem.indexOf(u8, data, vertical_start) orelse 0;
+                last_index = std.mem.lastIndexOf(u8, data, vertical_end) orelse 0;
+
+                offending_index = std.mem.indexOf(u8, data, horizontal_start);
+                if (offending_index != null) {
+                    offending_type = .horizontal;
+                }
             },
             else => {
                 return;
             },
         }
 
-        // Slide over the asertained slice, build the iter on , and attempt to insert as many values as we can until we hit an offending delimiter value.
-        // THis is *either* horizontal_start or vertical_start. Then we continue to iterate after recursing
         const slice = data[first_index + 1 .. last_index];
         var iter = std.mem.tokenize(u8, slice, ",");
-        var stop_iter_index: usize = 0;
-        var tmp_p_type: paneSplitType = .none;
 
-        const h_start = std.mem.indexOf(u8, slice, horizontal_start) orelse 0;
-        const v_start = std.mem.indexOf(u8, slice, vertical_start) orelse 0;
+        // Calculate stop offset to ensure we do not miss values whilst sliding below
+        const stop_offset = (data.len - slice.len);
 
-        // Determine where we start parsing the buffer value from. i.e. horizontal or vertical bucket split. If its neither, we would never reach this case based on the above check for vert/horizontal
-        if (h_start < v_start) {
-            stop_iter_index = h_start;
-            tmp_p_type = .horizontal;
+        if (offending_index) |index| {
+            stop_index = index;
         } else {
-            stop_iter_index = v_start;
-            tmp_p_type = .vertical;
+            stop_index = last_index;
         }
 
-        // We can do the same check as above when we initially call this. Compare the two indicies? If they exist and one is greater, iterate until that index in the slice buffer
         var index: usize = 0;
-        while (iter.next()) |val| : (index = 1) {
-            if (index == stop_iter_index) {
+        while (iter.next()) |val| {
+            index += val.len;
+            if (index >= stop_index - stop_offset and offending_type != null) {
                 // Recurse with all the data that remains in the buffer until the given end token
-                const end_index = std.mem.indexOf(u8, slice, tmp_p_type.endToken() orelse "") orelse 0;
-                try self.parseRecurse(slice[stop_iter_index..end_index], tmp_p_type, p_data, allocator);
-            }
-
-            if (std.mem.containsAtLeast(u8, val, 1, "x")) {
-                try p_data.addLeaf(p_type, paneSplitDataMeta{ .p_type = p_type, .coord_set = try allocator.dupe(u8, val) });
+                // User iter buffer?
+                return try self.parseRecurse(slice[stop_index - stop_offset ..], offending_type.?, p_split_data, allocator);
+            } else {
+                if (std.mem.containsAtLeast(u8, val, 1, "x")) {
+                    try p_split_data.addLeaf(p_type, paneSplitDataMeta{ .p_type = p_type, .coord_set = try allocator.dupe(u8, val) });
+                }
             }
         }
     }
@@ -556,9 +547,17 @@ pub const Resurrect = struct {
 
         // Iterate over all windows, if there are panes within the window, create/split the panes
         for (data.window_data, 0..) |window, index| {
+            _ = index;
             // parse the window layout, split all the windows as needed
             const layout_parsed = try window.parseWindowLayout(self.allocator);
-            print("index: {d} \ndata: {any}\n", .{ index, layout_parsed });
+            for (layout_parsed.horizontal.items) |value| {
+                print("Horizontal value {s} {any}\n", .{ value.coord_set, value.p_type });
+            }
+
+            for (layout_parsed.vertical.items) |value| {
+                print("Vertical - value {s} {any}\n", .{ value.coord_set, value.p_type });
+            }
+
             // try self.createWindow(window, layout_parsed, index);
         }
 
@@ -584,7 +583,7 @@ pub const Resurrect = struct {
         const command = try std.fmt.allocPrint(self.allocator, "tmux new-window -t {s} \\; rename-window -t {s}:{d} {s}", .{ r_i.app_name, r_i.app_name, index, window_data.window_name });
         try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, command }, self.allocator);
 
-        // if there is nothing else, i.e. no panes in the window, just exit since there is nothing to split on anyway
+        // if there is nothing else, i.e. no panes in the window, just exit since there is nothing to split on anyway. This is really the case of only initial existing
         if (layout.isEmpty()) {
             return;
         }
