@@ -428,8 +428,6 @@ const windowData = struct {
         while (iter.next()) |val| {
             index += val.len;
             if (index >= stop_index - stop_offset and offending_type != null) {
-                // Recurse with all the data that remains in the buffer until the given end token
-                // User iter buffer?
                 return try self.parseRecurse(slice[stop_index - stop_offset ..], offending_type.?, p_split_data, allocator);
             } else {
                 if (std.mem.containsAtLeast(u8, val, 1, "x")) {
@@ -520,24 +518,15 @@ pub const Resurrect = struct {
             }
         }
         // Spawns session to build all the windows and panes within. If this errors we should probably handle it and return gracefully
-        // try self.initialSessionCreate();
+        try self.initialSessionCreate();
 
         // Iterate over all windows, if there are panes within the window, create/split the panes
         for (data.window_data, 0..) |window, index| {
-            // parse the window layout, split all the windows as needed
             const layout_parsed = try window.parseWindowLayout(self.allocator);
-            for (layout_parsed.panes.items) |value| {
-                print("type: {any} value: {s}\n", .{ value.p_type, value.coord_set });
-            }
-
-            try self.createWindow(window, layout_parsed, index);
+            try self.createWindow(window, @constCast(&layout_parsed), index);
         }
 
-        // // For pane data we can do something like these commands
-        // // tmux switch-client -t "${session_name}:${window_number}"
-        // // tmux select-pane -t "$pane_index"
-        // // 	tmux send-keys -t "${session_name}:${window_number}.${pane_index}" "$command" enter
-        // // Iterate over the panes creating each pane as we go. This should map 1-1 with the windows created above.
+        // Iterate over the panes creating each pane as we go. This should map 1-1 with the windows created above.
         // var map_iter = pane_map.iterator();
         // while (map_iter.next()) |pm| {
         //     const pane_data = pane_map.get(pm.key_ptr.*) orelse continue;
@@ -549,33 +538,82 @@ pub const Resurrect = struct {
     }
 
     // Tmux code is backwards (o.0) -v is horizontal -h is vertical. I have no idea why. So [] is horizontal, but you must run the -v command to split  horizontally
-    fn createWindow(self: Self, window_data: windowData, layout: paneSplitData, index: usize) !void {
+    fn createWindow(self: Self, window_data: windowData, layout: *paneSplitData, index: usize) !void {
         const base_command = try r_i.commandBase(self.allocator);
         const sub_command = try r_i.subCommand();
         const command = try std.fmt.allocPrint(self.allocator, "tmux new-window -t {s} \\; rename-window -t {s}:{d} {s}", .{ r_i.app_name, r_i.app_name, index, window_data.window_name });
-        try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, command }, self.allocator);
+        // try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, command }, self.allocator);
+        _ = base_command;
+        _ = sub_command;
+        _ = command;
 
         // if there is nothing else, i.e. no panes in the window, just exit since there is nothing to split on anyway. This is really the case of only initial existing
         if (layout.isEmpty()) {
             return;
         }
 
-        //Split all the windows. Note: These are reversed, so its -v for horizontal and -h for vertical -_- fkn Tmux
-        for (layout.panes.items) |data| {
-            const coord_data = data.coord_set;
-            switch (data.p_type) {
-                .horizontal => {
-                    const i_command = try std.fmt.allocPrint(self.allocator, "tmux split-window -t {s} -v -p {d}", .{ window_data.window_name, try self.calculateSplitPercentage(.horizontal, layout.initial, coord_data) });
-                    try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, i_command }, self.allocator);
-                },
-                .vertical => {
-                    const i_command = try std.fmt.allocPrint(self.allocator, "tmux split-window -t {s} -h -p {d}", .{ window_data.window_name, try self.calculateSplitPercentage(.vertical, layout.initial, coord_data) });
-                    try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, i_command }, self.allocator);
-                },
-                else => {
-                    continue;
-                },
+        // Split in orders of 2, find the largest value of the two and use that for split
+        // Is it even? If not, we curate a pan from the last remianing value. Otherwise we evenly split into secors of 2 as the coordinates from the layout are always in pairs PER pane. (i.e. two values per pane for X&Y)
+        const odd = (@mod(layout.panes.items.len, 2) != 0);
+        var last_pane: ?paneSplitDataMeta = null;
+
+        if (odd) {
+            const len = layout.panes.items.len;
+            last_pane = layout.panes.items[len];
+            // resize to remove last value?
+            try layout.panes.resize(len - 1);
+        }
+
+        // Dedup coord sets into their respective pairs. Pick the larger, send forth with command
+        // parse the window layout, split all the windows as needed
+        var i_val: usize = 0;
+        while (i_val < layout.panes.items.len) {
+            const first = layout.panes.items[i_val];
+            const second = layout.panes.items[i_val + 1];
+
+            var s_f = std.mem.tokenize(u8, first.coord_set, "x");
+            var s_s = std.mem.tokenize(u8, second.coord_set, "x");
+
+            // Some odd stuff to compare the size of the given coords of ether set
+            const s_f_f = try std.fmt.parseInt(u8, s_f.next() orelse "0", 10);
+            const s_s_s = try std.fmt.parseInt(u8, s_s.next() orelse "0", 10);
+
+            const first_int = try std.fmt.parseInt(u8, s_f.next() orelse "0", 10);
+            const second_int = try std.fmt.parseInt(u8, s_s.next() orelse "0", 10);
+
+            print("here?\n", .{});
+            //Split the window. Note: These are reversed, so its -v for horizontal and -h for vertical -_- fkn Tmux
+            if (first_int > second_int or s_f_f > s_s_s) {
+                // try self.runPaneCommand(window_data, first, layout);
+            } else {
+                // try self.runPaneCommand(window_data, second, layout);
             }
+
+            i_val += 2;
+        }
+
+        // Run the odd man out if it exists so we do not miss any windows. This is quite an edge case and am unsure when this would even commence
+        if (odd) {
+            // try self.runPaneCommand(window_data, last_pane.?, layout);
+        }
+    }
+
+    fn runPaneCommand(self: Self, window_data: windowData, data: paneSplitDataMeta, layout: *paneSplitData) !void {
+        const base_command = try r_i.commandBase(self.allocator);
+        const sub_command = try r_i.subCommand();
+        const coord_data = data.coord_set;
+        switch (data.p_type) {
+            .horizontal => {
+                const i_command = try std.fmt.allocPrint(self.allocator, "tmux split-window -t {s} -v -p {d}", .{ window_data.window_name, try self.calculateSplitPercentage(.horizontal, layout.initial, coord_data) });
+                try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, i_command }, self.allocator);
+            },
+            .vertical => {
+                const i_command = try std.fmt.allocPrint(self.allocator, "tmux split-window -t {s} -h -p {d}", .{ window_data.window_name, try self.calculateSplitPercentage(.vertical, layout.initial, coord_data) });
+                try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, i_command }, self.allocator);
+            },
+            else => {
+                return;
+            },
         }
     }
 

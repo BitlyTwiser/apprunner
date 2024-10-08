@@ -107,7 +107,13 @@ example:
 ./apprunner -config_path="<file_path>" -disabled=true
 ```
 
-This will print a warning that disabled is set and resurrect will not run
+This will print a warning that disabled is set and resurrect will not run.
+
+To restore your session, just run:
+
+```
+./zig-out/bin/apprunner -restore=true
+```
 
 #### Config file storage:
 Resurrect stores a config file at `$HOME/.tmux/resurrect/config.json`
