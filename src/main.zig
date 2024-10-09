@@ -30,13 +30,13 @@ pub fn main() !void {
     const disabled = (parsed_cli.disable orelse false);
 
     // If disabled is not set, we obviously defualt to false
-    if (res_supported and !disabled) {
+    if (res_supported and !disabled and parsed_cli.restore == null) {
         // Start the thread to store session data every N minutes/seconds
         try res.saveThread();
     } else {
         if (disabled) {
             try res.printDisabledWarning();
-        } else {
+        } else if (parsed_cli.restore == null) {
             try res.printWarning();
             // Sleep for 3 seconds to display the warning to the user
             std.time.sleep(std.time.ns_per_s * 3);
@@ -74,8 +74,11 @@ pub fn main() !void {
 
             return;
         }
+
         // Restore stored session after crash, use a catch here and handle this error gradefully
         try res.restoreSession();
+
+        try setAbortSignalHandler(handleAbortSignal);
     } else {
         print("Invalid commands specified, please pass either config file path or restore flag as an argument to apprunner. Use apprunner -h for help\n", .{});
     }

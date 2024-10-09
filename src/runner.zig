@@ -92,8 +92,18 @@ pub const Runner = struct {
     }
 
     pub fn spawner(self: *Self, apps: []config.App) !void {
+        var thread_pool = try self.allocator.alloc(std.Thread, apps.len);
         for (apps, 0..) |app, i| {
-            try self.spawnProcess(app.name, app.standalone, app.command, app.start_location, app.env_path, i);
+            thread_pool[i] = try std.Thread.spawn(.{ .allocator = self.allocator }, spawnProcess, .{ self, app.name, app.standalone, app.command, app.start_location, app.env_path, i });
+            // Its too fast lol - Try sleeping for a moment to avoid missing shells
+            std.time.sleep(100000 * 1024);
+        }
+
+        // Wait for all threads to stop program from exiting
+        // We could also detach and run forever with a loop
+        // Ctrl+C event is handled from main
+        for (thread_pool) |thread| {
+            thread.join();
         }
     }
 

@@ -6,7 +6,8 @@
           "request": "launch",
           "name": "Debug",
           "program": "${workspaceFolder}/zig-out/bin/apprunner",
-          "args": ["-config_path=test_config.yml"],
+          "args": ["-restore=true"],
+        //   "args": ["-config_path=test_config.yml"],
           "cwd": "${workspaceFolder}",
       },
       {

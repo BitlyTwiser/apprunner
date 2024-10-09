@@ -24,7 +24,7 @@ const color_red = csi ++ "31m"; // red
 // Resurrect File paths
 const resurrect_folder_path = "/.tmux/resurrect";
 const resurrect_file_name = "config.json";
-const resurrect_wait_time = std.time.ns_per_min * 2; // 2 minutes
+const resurrect_wait_time = std.time.ns_per_min * 1; // 2 minutes
 const format_delimiter: []const u8 = "\\t"; // Used to seperate the lines in the formatters from the returned tmux data
 const format_delimiter_u8 = '\t';
 
@@ -517,39 +517,61 @@ pub const Resurrect = struct {
                 try pane_map.put(pane.window_name, pane_array_list);
             }
         }
+
+        // Thread break down: 1 for session, N number of panes, N number of windows. Take number of windows, divide eavenly. Add 1 if odd.
+        // Build thread count based on panes and the 1 session. Realloc based on window count.
+        var thread_pool = std.ArrayList(std.Thread).init(self.allocator);
+        // var thread_pool: [1]std.Thread = undefined;
+        // var thread_pool = try self.allocator.alloc(std.Thread, 1 + pane_map.count());
+
         // Spawns session to build all the windows and panes within. If this errors we should probably handle it and return gracefully
-        try self.initialSessionCreate();
+        try thread_pool.append(try self.sessionsCreateSpawnThread());
 
         // Iterate over all windows, if there are panes within the window, create/split the panes
         for (data.window_data, 0..) |window, index| {
             const layout_parsed = try window.parseWindowLayout(self.allocator);
-            try self.createWindow(window, @constCast(&layout_parsed), index);
+            const window_thread_pool = try self.createWindow(window, @constCast(&layout_parsed), index);
+
+            // Insert all threads into the pool
+            for (window_thread_pool) |window_thread| {
+                try thread_pool.append(window_thread);
+            }
         }
 
-        // Iterate over the panes creating each pane as we go. This should map 1-1 with the windows created above.
+        // // Iterate over the panes creating each pane as we go.
         // var map_iter = pane_map.iterator();
         // while (map_iter.next()) |pm| {
         //     const pane_data = pane_map.get(pm.key_ptr.*) orelse continue;
 
         //     for (pane_data.items) |p_item| {
-        //         try self.createPane(p_item);
+        //         print("command and name {s} {s}\n", .{ p_item.pane_current_command, p_item.window_name });
+        //         // try thread_pool.append(try std.Thread.spawn(.{}, createPane, .{ self, p_item }));
         //     }
         // }
+
+        // print("tp len {d}\n", .{thread_pool.len});
+
+        for (thread_pool.items) |i_thread| {
+            i_thread.join();
+        }
     }
 
     // Tmux code is backwards (o.0) -v is horizontal -h is vertical. I have no idea why. So [] is horizontal, but you must run the -v command to split  horizontally
-    fn createWindow(self: Self, window_data: windowData, layout: *paneSplitData, index: usize) !void {
+    fn createWindow(self: Self, window_data: windowData, layout: *paneSplitData, index: usize) ![]std.Thread {
+        var thread_pool = try self.allocator.alloc(std.Thread, 1);
+
         const base_command = try r_i.commandBase(self.allocator);
         const sub_command = try r_i.subCommand();
         const command = try std.fmt.allocPrint(self.allocator, "tmux new-window -t {s} \\; rename-window -t {s}:{d} {s}", .{ r_i.app_name, r_i.app_name, index, window_data.window_name });
-        // try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, command }, self.allocator);
-        _ = base_command;
-        _ = sub_command;
-        _ = command;
+
+        thread_pool[0] = try std.Thread.spawn(.{}, utils.runCommandEmpty, .{ &[_][]const u8{ base_command, sub_command, command }, self.allocator });
+        // _ = base_command;
+        // _ = sub_command;
+        // _ = command;
 
         // if there is nothing else, i.e. no panes in the window, just exit since there is nothing to split on anyway. This is really the case of only initial existing
         if (layout.isEmpty()) {
-            return;
+            return thread_pool;
         }
 
         // Split in orders of 2, find the largest value of the two and use that for split
@@ -564,10 +586,14 @@ pub const Resurrect = struct {
             try layout.panes.resize(len - 1);
         }
 
+        // Calculated based on the entire length of windows ascertained from above after the odd removal and divided evenly
+        thread_pool = try self.allocator.realloc(thread_pool, if (odd) layout.panes.items.len / 2 + 1 else layout.panes.items.len / 2);
+
         // Dedup coord sets into their respective pairs. Pick the larger, send forth with command
         // parse the window layout, split all the windows as needed
         var i_val: usize = 0;
-        while (i_val < layout.panes.items.len) {
+        var thread_pool_index: usize = 0;
+        while (i_val < layout.panes.items.len) : (thread_pool_index += 1) {
             const first = layout.panes.items[i_val];
             const second = layout.panes.items[i_val + 1];
 
@@ -581,12 +607,11 @@ pub const Resurrect = struct {
             const first_int = try std.fmt.parseInt(u8, s_f.next() orelse "0", 10);
             const second_int = try std.fmt.parseInt(u8, s_s.next() orelse "0", 10);
 
-            print("here?\n", .{});
             //Split the window. Note: These are reversed, so its -v for horizontal and -h for vertical -_- fkn Tmux
             if (first_int > second_int or s_f_f > s_s_s) {
-                // try self.runPaneCommand(window_data, first, layout);
+                thread_pool[thread_pool_index] = try std.Thread.spawn(.{}, runPaneCommand, .{ self, window_data, first, layout });
             } else {
-                // try self.runPaneCommand(window_data, second, layout);
+                thread_pool[thread_pool_index] = try std.Thread.spawn(.{}, runPaneCommand, .{ self, window_data, second, layout });
             }
 
             i_val += 2;
@@ -594,10 +619,13 @@ pub const Resurrect = struct {
 
         // Run the odd man out if it exists so we do not miss any windows. This is quite an edge case and am unsure when this would even commence
         if (odd) {
-            // try self.runPaneCommand(window_data, last_pane.?, layout);
+            thread_pool[thread_pool.len - 1] = try std.Thread.spawn(.{}, runPaneCommand, .{ self, window_data, last_pane.?, layout });
         }
+
+        return thread_pool;
     }
 
+    // We might need to run all of these in threads to stop from early execution
     fn runPaneCommand(self: Self, window_data: windowData, data: paneSplitDataMeta, layout: *paneSplitData) !void {
         const base_command = try r_i.commandBase(self.allocator);
         const sub_command = try r_i.subCommand();
@@ -651,14 +679,15 @@ pub const Resurrect = struct {
         try utils.runCommandEmpty(&[_][]const u8{ base_command, sub_command, command }, self.allocator);
     }
 
+    // Wrapper to spawn thread so it does not exit.
+    fn sessionsCreateSpawnThread(self: Self) !std.Thread {
+        return try std.Thread.spawn(.{}, initialSessionCreate, .{self});
+    }
+
     // Spawns the initial session that all windows and panes are placed into using default app name
     fn initialSessionCreate(self: Self) !void {
-        try utils.runCommandEmpty(&[_][]const u8{
-            "tmux",
-            "new-session",
-            "-s",
-            r_i.app_name,
-        }, self.allocator);
+        const command = try std.fmt.allocPrint(self.allocator, "tmux new-session -s {s}", .{r_i.app_name});
+        try utils.runCommandEmptyWithShell(command, self.allocator);
     }
 
     /// Wrapper around save to run this in a thread. Runs indefinitely until os.Exit()
@@ -670,6 +699,8 @@ pub const Resurrect = struct {
     /// ran in a thread on start of the application which stores session data every N Seconds/Minutes
     /// This is a rolling backup - no copies are stored
     pub fn save(self: Self) !void {
+        print("we should definitely not be here", .{});
+
         // Write err to logfile - unsure if this even works lol
         errdefer |err| {
             var file: ?std.fs.File = undefined;
@@ -846,6 +877,8 @@ fn test_sig_restore() !void {}
 test test_sig_restore {
     var res = try Resurrect.init(std.heap.page_allocator);
     try res.restoreSession();
+
+    print("I should never get hit", .{});
 }
 
 test "Store some json data" {
