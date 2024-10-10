@@ -364,13 +364,17 @@ const windowData = struct {
 
         // Get first index of the offending character i.e. [ and then the last. Everthing in that sector is horiztonal until we hit another offending and differentiation bracket. I.e. {}
         // Split on every X. For each value we find that matches this, insert the leaf
-        const h_start = std.mem.indexOf(u8, buffer, horizontal_start) orelse 0;
-        const v_start = std.mem.indexOf(u8, buffer, vertical_start) orelse 0;
+        const h_start = std.mem.indexOf(u8, buffer, horizontal_start);
+        const v_start = std.mem.indexOf(u8, buffer, vertical_start);
 
         // Determine where we start parsing the buffer value from. i.e. horizontal or vertical bucket split. If its neither, we would never reach this case based on the above check for vert/horizontal
-        if (h_start < v_start) {
+        if (h_start != null and v_start != null and h_start.? < v_start.?) {
             try self.parseRecurse(buffer, .horizontal, &pane_data, allocator);
-        } else {
+        } else if (h_start == null and v_start != null) {
+            try self.parseRecurse(buffer, .vertical, &pane_data, allocator);
+        } else if (v_start == null and h_start != null) {
+            try self.parseRecurse(buffer, .horizontal, &pane_data, allocator);
+        } else if (h_start != null and v_start != null and v_start.? < h_start.?) {
             try self.parseRecurse(buffer, .vertical, &pane_data, allocator);
         }
 
@@ -384,6 +388,8 @@ const windowData = struct {
         var offending_index: ?usize = 0;
         var offending_type: ?paneSplitType = null;
         var stop_index: usize = 0;
+
+        print("type {any}\n", .{p_type});
 
         // End recursion case as well
         if (data.len == 0) return;
@@ -412,6 +418,7 @@ const windowData = struct {
             },
         }
 
+        if (data.len == 0) return;
         const slice = data[first_index + 1 .. last_index];
         var iter = std.mem.tokenize(u8, slice, ",");
 
@@ -521,11 +528,11 @@ pub const Resurrect = struct {
         // Thread break down: 1 for session, N number of panes, N number of windows. Take number of windows, divide eavenly. Add 1 if odd.
         // Build thread count based on panes and the 1 session. Realloc based on window count.
         var thread_pool = std.ArrayList(std.Thread).init(self.allocator);
-        // var thread_pool: [1]std.Thread = undefined;
-        // var thread_pool = try self.allocator.alloc(std.Thread, 1 + pane_map.count());
 
         // Spawns session to build all the windows and panes within. If this errors we should probably handle it and return gracefully
         try thread_pool.append(try self.sessionsCreateSpawnThread());
+
+        std.time.sleep(100000 * 1024);
 
         // Iterate over all windows, if there are panes within the window, create/split the panes
         for (data.window_data, 0..) |window, index| {
@@ -538,40 +545,45 @@ pub const Resurrect = struct {
             }
         }
 
-        // // Iterate over the panes creating each pane as we go.
+        // Iterate over the panes creating each pane as we go.
         // var map_iter = pane_map.iterator();
         // while (map_iter.next()) |pm| {
         //     const pane_data = pane_map.get(pm.key_ptr.*) orelse continue;
 
         //     for (pane_data.items) |p_item| {
-        //         print("command and name {s} {s}\n", .{ p_item.pane_current_command, p_item.window_name });
-        //         // try thread_pool.append(try std.Thread.spawn(.{}, createPane, .{ self, p_item }));
+        //         try thread_pool.append(try std.Thread.spawn(.{}, createPane, .{ self, p_item }));
         //     }
         // }
 
         // print("tp len {d}\n", .{thread_pool.len});
-
+        // Join is what actually runs stuff, so we attempt to slow down here with awaiting shells to spawn
         for (thread_pool.items) |i_thread| {
             i_thread.join();
         }
     }
 
+    // Wrap sleep since we do this a fair bit awaiting windows and sessions to spawn.
+    fn sleep(self: Self) void {
+        _ = self;
+        std.time.sleep(100000 * 1024);
+    }
+
     // Tmux code is backwards (o.0) -v is horizontal -h is vertical. I have no idea why. So [] is horizontal, but you must run the -v command to split  horizontally
     fn createWindow(self: Self, window_data: windowData, layout: *paneSplitData, index: usize) ![]std.Thread {
-        var thread_pool = try self.allocator.alloc(std.Thread, 1);
+        var thread_pool = std.ArrayList(std.Thread).init(self.allocator);
+        // var thread_pool = try self.allocator.alloc(std.Thread, 1);
 
         const base_command = try r_i.commandBase(self.allocator);
         const sub_command = try r_i.subCommand();
         const command = try std.fmt.allocPrint(self.allocator, "tmux new-window -t {s} \\; rename-window -t {s}:{d} {s}", .{ r_i.app_name, r_i.app_name, index, window_data.window_name });
 
-        thread_pool[0] = try std.Thread.spawn(.{}, utils.runCommandEmpty, .{ &[_][]const u8{ base_command, sub_command, command }, self.allocator });
-        // _ = base_command;
-        // _ = sub_command;
-        // _ = command;
+        try thread_pool.append(try std.Thread.spawn(.{}, utils.runCommandEmpty, .{ &[_][]const u8{ base_command, sub_command, command }, self.allocator }));
+
+        self.sleep();
 
         // if there is nothing else, i.e. no panes in the window, just exit since there is nothing to split on anyway. This is really the case of only initial existing
         if (layout.isEmpty()) {
-            return thread_pool;
+            return thread_pool.items;
         }
 
         // Split in orders of 2, find the largest value of the two and use that for split
@@ -587,7 +599,6 @@ pub const Resurrect = struct {
         }
 
         // Calculated based on the entire length of windows ascertained from above after the odd removal and divided evenly
-        thread_pool = try self.allocator.realloc(thread_pool, if (odd) layout.panes.items.len / 2 + 1 else layout.panes.items.len / 2);
 
         // Dedup coord sets into their respective pairs. Pick the larger, send forth with command
         // parse the window layout, split all the windows as needed
@@ -609,9 +620,9 @@ pub const Resurrect = struct {
 
             //Split the window. Note: These are reversed, so its -v for horizontal and -h for vertical -_- fkn Tmux
             if (first_int > second_int or s_f_f > s_s_s) {
-                thread_pool[thread_pool_index] = try std.Thread.spawn(.{}, runPaneCommand, .{ self, window_data, first, layout });
+                try thread_pool.append(try std.Thread.spawn(.{}, runPaneCommand, .{ self, window_data, first, layout }));
             } else {
-                thread_pool[thread_pool_index] = try std.Thread.spawn(.{}, runPaneCommand, .{ self, window_data, second, layout });
+                try thread_pool.append(try std.Thread.spawn(.{}, runPaneCommand, .{ self, window_data, second, layout }));
             }
 
             i_val += 2;
@@ -619,10 +630,10 @@ pub const Resurrect = struct {
 
         // Run the odd man out if it exists so we do not miss any windows. This is quite an edge case and am unsure when this would even commence
         if (odd) {
-            thread_pool[thread_pool.len - 1] = try std.Thread.spawn(.{}, runPaneCommand, .{ self, window_data, last_pane.?, layout });
+            try thread_pool.append(try std.Thread.spawn(.{}, runPaneCommand, .{ self, window_data, last_pane.?, layout }));
         }
 
-        return thread_pool;
+        return thread_pool.items;
     }
 
     // We might need to run all of these in threads to stop from early execution
@@ -643,6 +654,8 @@ pub const Resurrect = struct {
                 return;
             },
         }
+
+        self.sleep();
     }
 
     fn calculateSplitPercentage(self: Self, p_type: paneSplitType, base_val: []const u8, coord_set: []const u8) !usize {
