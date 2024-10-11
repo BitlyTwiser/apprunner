@@ -1,13 +1,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const os = std.os;
-const assert = std.debug.assert;
 const config = @import("./config.zig");
 const runner = @import("./runner.zig");
+const resurrect = @import("./resurrect.zig").Resurrect;
 const shell_err = runner.ShellError;
+const snek = @import("snek").Snek;
 
-// Functions from std
 const print = std.debug.print;
+const assert = std.debug.assert;
+
+const CliArguments = struct { config_path: ?[]const u8, restore: ?bool, disable: ?bool };
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -17,28 +20,70 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    if (args.len < 2) {
-        print("Please provide a path to the config.yml file", .{});
-        return;
+    var cli = try snek(CliArguments).init(allocator);
+    const parsed_cli = try cli.parse();
+
+    // Check tmux version and print warning if we cannot start resurrect
+    const res = try resurrect.init(allocator);
+    const res_supported = try res.checkSupportedVersion();
+
+    const disabled = (parsed_cli.disable orelse false);
+
+    // If disabled is not set, we obviously defualt to false
+    if (res_supported and !disabled and parsed_cli.restore == null) {
+        // Start the thread to store session data every N minutes/seconds
+        try res.saveThread();
+    } else {
+        if (disabled) {
+            try res.printDisabledWarning();
+
+            std.time.sleep(std.time.ns_per_s * 3);
+        } else if (parsed_cli.restore == null) {
+            try res.printWarning();
+            // Sleep for 3 seconds to display the warning to the user
+            std.time.sleep(std.time.ns_per_s * 3);
+        }
     }
 
-    var yml_config = try config.YamlConfig.init(allocator, args[1]);
-    const results = try yml_config.parseConfig();
-    defer allocator.free(results.apps);
-
-    // Spawns all threads and waits
-    var run = runner.Runner.init(allocator) catch |err| {
-        switch (err) {
-            runner.ShellError.ShellNotFound => {
-                print("error finding appropriate shell to run tmux commands. Please change shells and try again", .{});
-            },
+    // Cli application path parsing. Either restore or run the application normally using config file path
+    if (parsed_cli.config_path) |config_path| {
+        if (parsed_cli.restore != null) {
+            print("{s}", .{"Cannot use restore flag with config path.\n"});
+            return;
         }
-        return;
-    };
-    try run.spawner(results.apps);
 
-    // Listen for the exit events on ctrl+c to gracefully exit
-    try setAbortSignalHandler(handleAbortSignal);
+        var yml_config = try config.YamlConfig.init(allocator, config_path);
+        const results = try yml_config.parseConfig();
+        defer allocator.free(results.apps);
+
+        // Spawns all threads and waits
+        var run = runner.Runner.init(allocator) catch |err| {
+            switch (err) {
+                runner.ShellError.ShellNotFound => {
+                    print("error finding appropriate shell to run tmux commands. Please change shells and try again\n", .{});
+                },
+            }
+            return;
+        };
+        try run.spawner(results.apps);
+
+        // Listen for the exit events on ctrl+c to gracefully exit
+        try setAbortSignalHandler(handleAbortSignal);
+    } else if (parsed_cli.restore != null and parsed_cli.config_path == null) {
+        // Do not allow resurrection on non-supported version of tmux
+        if (!res_supported) {
+            print("Invalid version of Tmux. You must use Tmux version 1.9 or greater for resurrection", .{});
+
+            return;
+        }
+
+        // Restore stored session after crash, use a catch here and handle this error gradefully
+        try res.restoreSession();
+
+        try setAbortSignalHandler(handleAbortSignal);
+    } else {
+        print("Invalid commands specified, please pass either config file path or restore flag as an argument to apprunner. Use apprunner -h for help\n", .{});
+    }
 }
 
 // Gracefully exit on signal termination events
