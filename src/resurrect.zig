@@ -389,8 +389,6 @@ const windowData = struct {
         var offending_type: ?paneSplitType = null;
         var stop_index: usize = 0;
 
-        print("type {any}\n", .{p_type});
-
         // End recursion case as well
         if (data.len == 0) return;
 
