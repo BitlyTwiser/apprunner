@@ -7,3 +7,4 @@ apps:
     command: ls -la
     standalone: false 
     start_location: /var/log
+    env_path: test-env

@@ -7,6 +7,7 @@ pub const App = struct {
     command: []const u8,
     standalone: bool,
     start_location: []const u8, // For specific folder, if not standalone
+    env_path: ?[]const u8,
 };
 
 pub const Config = struct {

@@ -18,6 +18,14 @@ pub fn build(b: *std.Build) void {
     const ymlz = b.dependency("ymlz", .{});
     exe.root_module.addImport("ymlz", ymlz.module("root"));
 
+    // Add Zdotenv
+    const zdotenv = b.dependency("zdotenv", .{});
+    exe.root_module.addImport("zdotenv", zdotenv.module("zdotenv"));
+
+    // Add Snek
+    const snek = b.dependency("snek", .{});
+    exe.root_module.addImport("snek", snek.module("snek"));
+
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
 
