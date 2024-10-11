@@ -36,6 +36,8 @@ pub fn main() !void {
     } else {
         if (disabled) {
             try res.printDisabledWarning();
+
+            std.time.sleep(std.time.ns_per_s * 3);
         } else if (parsed_cli.restore == null) {
             try res.printWarning();
             // Sleep for 3 seconds to display the warning to the user
