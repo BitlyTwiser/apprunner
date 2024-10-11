@@ -532,7 +532,7 @@ pub const Resurrect = struct {
         // Spawns session to build all the windows and panes within. If this errors we should probably handle it and return gracefully
         try thread_pool.append(try self.sessionsCreateSpawnThread());
 
-        std.time.sleep(100000 * 1024);
+        self.sleep();
 
         // Iterate over all windows, if there are panes within the window, create/split the panes
         for (data.window_data, 0..) |window, index| {
@@ -546,16 +546,16 @@ pub const Resurrect = struct {
         }
 
         // Iterate over the panes creating each pane as we go.
-        // var map_iter = pane_map.iterator();
-        // while (map_iter.next()) |pm| {
-        //     const pane_data = pane_map.get(pm.key_ptr.*) orelse continue;
+        var map_iter = pane_map.iterator();
+        while (map_iter.next()) |pm| {
+            const pane_data = pane_map.get(pm.key_ptr.*) orelse continue;
 
-        //     for (pane_data.items) |p_item| {
-        //         try thread_pool.append(try std.Thread.spawn(.{}, createPane, .{ self, p_item }));
-        //     }
-        // }
+            for (pane_data.items) |p_item| {
+                try thread_pool.append(try std.Thread.spawn(.{}, createPane, .{ self, p_item }));
+                self.sleep();
+            }
+        }
 
-        // print("tp len {d}\n", .{thread_pool.len});
         // Join is what actually runs stuff, so we attempt to slow down here with awaiting shells to spawn
         for (thread_pool.items) |i_thread| {
             i_thread.join();
@@ -571,11 +571,16 @@ pub const Resurrect = struct {
     // Tmux code is backwards (o.0) -v is horizontal -h is vertical. I have no idea why. So [] is horizontal, but you must run the -v command to split  horizontally
     fn createWindow(self: Self, window_data: windowData, layout: *paneSplitData, index: usize) ![]std.Thread {
         var thread_pool = std.ArrayList(std.Thread).init(self.allocator);
-        // var thread_pool = try self.allocator.alloc(std.Thread, 1);
 
         const base_command = try r_i.commandBase(self.allocator);
         const sub_command = try r_i.subCommand();
-        const command = try std.fmt.allocPrint(self.allocator, "tmux new-window -t {s} \\; rename-window -t {s}:{d} {s}", .{ r_i.app_name, r_i.app_name, index, window_data.window_name });
+        var command: []u8 = undefined;
+
+        if (index == 0) {
+            command = try std.fmt.allocPrint(self.allocator, "tmux rename-window -t {s}:{d} {s}", .{ r_i.app_name, index, window_data.window_name });
+        } else {
+            command = try std.fmt.allocPrint(self.allocator, "tmux new-window -t {s} \\; rename-window -t {s}:{d} {s}", .{ r_i.app_name, r_i.app_name, index, window_data.window_name });
+        }
 
         try thread_pool.append(try std.Thread.spawn(.{}, utils.runCommandEmpty, .{ &[_][]const u8{ base_command, sub_command, command }, self.allocator }));
 
@@ -597,8 +602,6 @@ pub const Resurrect = struct {
             // resize to remove last value?
             try layout.panes.resize(len - 1);
         }
-
-        // Calculated based on the entire length of windows ascertained from above after the odd removal and divided evenly
 
         // Dedup coord sets into their respective pairs. Pick the larger, send forth with command
         // parse the window layout, split all the windows as needed
@@ -624,6 +627,8 @@ pub const Resurrect = struct {
             } else {
                 try thread_pool.append(try std.Thread.spawn(.{}, runPaneCommand, .{ self, window_data, second, layout }));
             }
+
+            self.sleep();
 
             i_val += 2;
         }
@@ -672,9 +677,11 @@ pub const Resurrect = struct {
         // now divide based on type
         switch (p_type) {
             .horizontal => {
+                if (x == x_base) return 50; // If they are the same its 50%
                 return x / x_base;
             },
             .vertical => {
+                if (y == y_base) return 50; // If they are the same its 50%
                 return y / y_base;
             },
             else => {
@@ -712,8 +719,6 @@ pub const Resurrect = struct {
     /// ran in a thread on start of the application which stores session data every N Seconds/Minutes
     /// This is a rolling backup - no copies are stored
     pub fn save(self: Self) !void {
-        print("we should definitely not be here", .{});
-
         // Write err to logfile - unsure if this even works lol
         errdefer |err| {
             var file: ?std.fs.File = undefined;
