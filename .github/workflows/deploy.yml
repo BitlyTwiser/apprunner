@@ -46,7 +46,7 @@ jobs:
       - name: Package and create binary for MacOS 
         run: |
           mkdir -p apprunner_macos 
-          zig build -p apprunner_macos/--release=fast -Dtarget=x86_64-macos
+          zig build -p apprunner_macos/ --release=fast -Dtarget=x86_64-macos
           zip -r apprunner_macos.zip apprunner_macos
 
       # MacOS Binary Creation Apple Silicon
